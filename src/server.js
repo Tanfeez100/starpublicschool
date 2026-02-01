@@ -7,6 +7,7 @@ import feeRoutes from "./routes/fee.routes.js";
 import invoiceRoutes from "./routes/invoice.routes.js";
 import billRoutes from "./routes/bill.routes.js";
 import subjectRoutes from "./routes/subject.routes.js";
+import driveRoutes from "./routes/drive.routes.js";
 console.log("ENV URL:", process.env.SUPABASE_URL);
 console.log(
   "ENV KEY:",
@@ -20,6 +21,7 @@ app.use("/api/subjects", subjectRoutes);
 
 app.use("/api/invoice", invoiceRoutes);
 app.use("/api/bills", billRoutes);
+app.use("/api/drive", driveRoutes);
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
