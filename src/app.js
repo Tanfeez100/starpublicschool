@@ -5,6 +5,7 @@ import marksRoutes from "./routes/marks.routes.js";
 import studentsRoutes from "./routes/students.routes.js";
 import invoiceRoutes from "./routes/invoice.routes.js";
 import feeRoutes from "./routes/fee.routes.js";
+import megaRoutes from "./routes/mega.routes.js";
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -15,5 +16,6 @@ app.use("/api/marks", marksRoutes);
 app.use("/api/students", studentsRoutes);
 app.use("/api", invoiceRoutes);
 app.use("/api/fees", feeRoutes);
+app.use("/api/mega", megaRoutes);
 
 export default app;
