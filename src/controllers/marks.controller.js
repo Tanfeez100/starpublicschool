@@ -1,6 +1,254 @@
 import { supabase } from "../services/supabase.js";
 
 /**
+ * Helper: Get result summary for a single terminal
+ */
+const getTerminalResult = async (student, cls, section, terminal, classSubjects) => {
+  try {
+    const subjectIds = classSubjects.map((cs) => cs.subject_id || cs.subjects?.id).filter(Boolean);
+    
+    const { data: marksData, error: marksError } = await supabase
+      .from("marks")
+      .select("*")
+      .eq("student_id", student.id)
+      .eq("terminal", terminal)
+      .in("subject_id", subjectIds);
+
+    if (marksError) {
+      console.error(`Error fetching marks for terminal ${terminal}:`, marksError);
+      return null;
+    }
+
+    // Build marks map
+    const marksMap = {};
+    marksData?.forEach((m) => {
+      marksMap[m.subject_id] = {
+        external: m.external_marks,
+        internal: m.internal_marks,
+        total: (m.external_marks || 0) + (m.internal_marks || 0),
+      };
+    });
+
+    // Calculate summary
+    const DEFAULT_MAX_MARKS = 100;
+    let totalMaxMarks = 0;
+    let totalObtained = 0;
+    const marksDetails = [];
+
+    classSubjects.forEach((cs) => {
+      const subject = cs.subjects;
+      if (!subject || !subject.id) return;
+      
+      const maxMarks = DEFAULT_MAX_MARKS;
+      const subjectId = cs.subject_id || subject.id;
+      const obtained = marksMap[subjectId] || {
+        external: null,
+        internal: null,
+        total: 0,
+      };
+
+      totalMaxMarks += maxMarks;
+      totalObtained += obtained.total || 0;
+
+      marksDetails.push({
+        subject: subject.name,
+        code: subject.code,
+        max_marks: maxMarks,
+        external_marks: obtained.external || "AB",
+        internal_marks: obtained.internal || "AB",
+        total_obtained: obtained.total || "AB",
+      });
+    });
+
+    const percentage = totalMaxMarks > 0 ? ((totalObtained / totalMaxMarks) * 100).toFixed(2) : "0.00";
+    const division =
+      percentage >= 60 ? "First"
+      : percentage >= 45 ? "Second"
+      : percentage >= 33 ? "Third"
+      : "Fail";
+
+    // Check if published
+    const { data: publishedSummary } = await supabase
+      .from("result_summary")
+      .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
+      .eq("student_id", student.id)
+      .eq("terminal", terminal)
+      .maybeSingle();
+
+    let finalTotalMaxMarks = totalMaxMarks;
+    let finalTotalObtained = totalObtained;
+    let finalPercentage = percentage;
+    let finalDivision = division;
+    let finalRank = null;
+    let publishedDate = null;
+    const status = publishedSummary?.status || (totalObtained > 0 ? "Pending" : "Pending");
+
+    if (publishedSummary && publishedSummary.status === "Published") {
+      finalTotalMaxMarks = publishedSummary.total_marks || totalMaxMarks;
+      finalTotalObtained = publishedSummary.total_obtained || totalObtained;
+      finalPercentage = publishedSummary.percentage || percentage;
+      finalDivision = publishedSummary.division || division;
+      finalRank = publishedSummary.rank || null;
+      if (publishedSummary.calculated_at) {
+        publishedDate = new Date(publishedSummary.calculated_at).toISOString().split('T')[0];
+      }
+    }
+
+    const totalObtainedRounded = finalTotalObtained > 0 ? Math.round(finalTotalObtained * 100) / 100 : 0;
+    const percentageNum = parseFloat(finalPercentage);
+
+    return {
+      terminal,
+      marks: marksDetails,
+      summary: {
+        total_max_marks: finalTotalMaxMarks,
+        total_obtained: totalObtainedRounded,
+        percentage: percentageNum,
+        division: finalDivision,
+        rank: finalRank,
+        status,
+        published_date: publishedDate,
+      },
+    };
+  } catch (err) {
+    console.error(`Error in getTerminalResult for ${terminal}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Get annual result (all terminals combined)
+ */
+const getAnnualResult = async (req, res, cls, roll, section) => {
+  try {
+    // Fetch student
+    let studentQuery = supabase
+      .from("students")
+      .select("*")
+      .eq("class", cls)
+      .eq("roll_no", Number(roll));
+    
+    if (section) {
+      studentQuery = studentQuery.eq("section", section);
+    }
+    
+    const { data: student, error: studentError } = await studentQuery.single();
+
+    if (studentError || !student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    // Get class subjects
+    let classSubjects = null;
+    
+    if (section) {
+      const { data: sectionData, error: sectionError } = await supabase
+        .from("class_subjects")
+        .select(`
+          subject_id,
+          section,
+          sequence,
+          subjects (
+            id,
+            code,
+            name
+          )
+        `)
+        .eq("class", cls)
+        .eq("section", section)
+        .order("sequence", { ascending: true });
+
+      if (!sectionError && sectionData && sectionData.length > 0) {
+        classSubjects = sectionData;
+      }
+    }
+
+    if (!classSubjects) {
+      const { data: allData, error: allError } = await supabase
+        .from("class_subjects")
+        .select(`
+          subject_id,
+          sequence,
+          subjects (
+            id,
+            code,
+            name
+          )
+        `)
+        .eq("class", cls)
+        .order("sequence", { ascending: true });
+
+      classSubjects = allData;
+      if (allError) {
+        return res.status(500).json({ 
+          message: "Failed to fetch subjects for this class",
+          error: allError.message 
+        });
+      }
+    }
+
+    if (!classSubjects || classSubjects.length === 0) {
+      return res.status(404).json({ 
+        message: `No subjects found for class "${cls}"`,
+      });
+    }
+
+    // Fetch results for all three terminals
+    const terminals = ["First", "Second", "Third"];
+    const allResults = [];
+
+    for (const term of terminals) {
+      const result = await getTerminalResult(student, cls, section, term, classSubjects);
+      if (result) {
+        allResults.push(result);
+      }
+    }
+
+    // Calculate annual totals
+    let annualTotalMaxMarks = 0;
+    let annualTotalObtained = 0;
+
+    allResults.forEach(result => {
+      annualTotalMaxMarks += result.summary.total_max_marks;
+      annualTotalObtained += result.summary.total_obtained;
+    });
+
+    const annualPercentage = annualTotalMaxMarks > 0 
+      ? parseFloat(((annualTotalObtained / annualTotalMaxMarks) * 100).toFixed(2))
+      : 0;
+
+    const annualDivision =
+      annualPercentage >= 60 ? "First"
+      : annualPercentage >= 45 ? "Second"
+      : annualPercentage >= 33 ? "Third"
+      : "Fail";
+
+    // Response with all terminals
+    res.json({
+      student: {
+        id: student.id,
+        name: student.name,
+        father_name: student.father_name,
+        class: student.class,
+        roll_no: student.roll_no,
+        section: student.section,
+      },
+      terminal: "All",
+      terminals: allResults,
+      annual_summary: {
+        total_max_marks: annualTotalMaxMarks,
+        total_obtained: annualTotalObtained,
+        percentage: annualPercentage,
+        division: annualDivision,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
  * Get all subjects for a class
  */
 export const getClassSubjects = async (req, res) => {
@@ -44,6 +292,7 @@ export const getClassSubjects = async (req, res) => {
 /**
  * Get result for a student (specific terminal)
  * Query: ?class=UKG&roll=5&terminal=First
+ * For all terminals: ?class=UKG&roll=5&terminal=All
  */
 export const getResultByClassRoll = async (req, res) => {
   try {
@@ -55,7 +304,13 @@ export const getResultByClassRoll = async (req, res) => {
       });
     }
 
-    // 1️⃣ Fetch student (with optional section filter)
+    // If terminal is "All", fetch all three terminals
+    if (terminal.toLowerCase() === "all") {
+      return getAnnualResult(req, res, cls, roll, section);
+    }
+
+    // Rest of the code remains the same for single terminal
+    // ... (existing single terminal logic)
     let studentQuery = supabase
       .from("students")
       .select("*")
@@ -211,7 +466,7 @@ export const getResultByClassRoll = async (req, res) => {
     // 6️⃣ Check if result is published and use published data if available
     const { data: publishedSummary } = await supabase
       .from("result_summary")
-      .select("status, total_marks, total_obtained, percentage, division")
+      .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
       .eq("student_id", student.id)
       .eq("terminal", terminal)
       .maybeSingle();
@@ -221,6 +476,8 @@ export const getResultByClassRoll = async (req, res) => {
     let finalTotalObtained = totalObtained;
     let finalPercentage = percentage;
     let finalDivision = division;
+    let finalRank = null;
+    let publishedDate = null;
     const status = publishedSummary?.status || (totalObtained > 0 ? "Pending" : "Pending");
 
     if (publishedSummary && publishedSummary.status === "Published") {
@@ -229,10 +486,17 @@ export const getResultByClassRoll = async (req, res) => {
       finalTotalObtained = publishedSummary.total_obtained || totalObtained;
       finalPercentage = publishedSummary.percentage || percentage;
       finalDivision = publishedSummary.division || division;
+      finalRank = publishedSummary.rank || null;
+      // Use calculated_at as published_date
+      if (publishedSummary.calculated_at) {
+        publishedDate = new Date(publishedSummary.calculated_at).toISOString().split('T')[0];
+      }
     }
     
     // Ensure total_obtained is a number, not rounded incorrectly
     const totalObtainedRounded = finalTotalObtained > 0 ? Math.round(finalTotalObtained * 100) / 100 : 0;
+    // Convert percentage to number with 2 decimals
+    const percentageNum = parseFloat(finalPercentage);
 
     // 7️⃣ Response
     res.json({
@@ -249,9 +513,11 @@ export const getResultByClassRoll = async (req, res) => {
       summary: {
         total_max_marks: finalTotalMaxMarks,
         total_obtained: totalObtainedRounded,
-        percentage: finalPercentage,
+        percentage: percentageNum,
         division: finalDivision,
+        rank: finalRank,
         status,
+        published_date: publishedDate,
       },
     });
   } catch (err) {
@@ -798,10 +1064,11 @@ export const publishResult = async (req, res) => {
     const DEFAULT_MAX_MARKS = 100; // 80 external + 20 internal
     const totalMaxMarks = classSubjects.length * DEFAULT_MAX_MARKS;
 
-    const publishedResults = [];
+    // First pass: Calculate percentages for all students to determine ranking
+    const studentResults = [];
     const errors = [];
 
-    // Process each student
+    // Process each student to calculate their percentage
     for (const student of students) {
       try {
         // Get marks for this student
@@ -825,8 +1092,8 @@ export const publishResult = async (req, res) => {
         });
 
         const percentage = totalMaxMarks > 0 
-          ? ((totalObtained / totalMaxMarks) * 100).toFixed(2) 
-          : "0.00";
+          ? parseFloat(((totalObtained / totalMaxMarks) * 100).toFixed(2))
+          : 0;
         
         const division = 
           percentage >= 60 ? "First" 
@@ -834,30 +1101,7 @@ export const publishResult = async (req, res) => {
           : percentage >= 33 ? "Third" 
           : "Fail";
 
-        // Lock marks
-        await supabase
-          .from("marks")
-          .update({ status: "LOCKED" })
-          .eq("student_id", student.id)
-          .eq("terminal", terminal);
-
-        // Save summary
-        await supabase
-          .from("result_summary")
-          .upsert(
-            {
-              student_id: student.id,
-              terminal,
-              total_marks: totalMaxMarks,
-              total_obtained: totalObtained,
-              percentage,
-              division,
-              status: "Published",
-            },
-            { onConflict: "student_id,terminal" }
-          );
-
-        publishedResults.push({
+        studentResults.push({
           student_id: student.id,
           name: student.name,
           roll_no: student.roll_no,
@@ -867,6 +1111,61 @@ export const publishResult = async (req, res) => {
         });
       } catch (err) {
         errors.push(`Error processing ${student.name}: ${err.message}`);
+      }
+    }
+
+    // Sort by percentage descending to determine rank
+    const sortedResults = [...studentResults].sort((a, b) => b.percentage - a.percentage);
+    
+    // Create rank map (only top 10 get ranks)
+    const rankMap = {};
+    sortedResults.forEach((result, index) => {
+      if (index < 10) {
+        rankMap[result.student_id] = index + 1;
+      }
+    });
+
+    // Second pass: Save results with ranks
+    const publishedResults = [];
+    for (const result of studentResults) {
+      try {
+        // Lock marks
+        await supabase
+          .from("marks")
+          .update({ status: "LOCKED" })
+          .eq("student_id", result.student_id)
+          .eq("terminal", terminal);
+
+        // Save summary with rank
+        const rank = rankMap[result.student_id] || null;
+        await supabase
+          .from("result_summary")
+          .upsert(
+            {
+              student_id: result.student_id,
+              terminal,
+              total_marks: totalMaxMarks,
+              total_obtained: result.total_obtained,
+              percentage: result.percentage,
+              division: result.division,
+              rank: rank,
+              status: "Published",
+              calculated_at: new Date().toISOString(),
+            },
+            { onConflict: "student_id,terminal" }
+          );
+
+        publishedResults.push({
+          student_id: result.student_id,
+          name: result.name,
+          roll_no: result.roll_no,
+          total_obtained: result.total_obtained,
+          percentage: result.percentage,
+          division: result.division,
+          rank: rank,
+        });
+      } catch (err) {
+        errors.push(`Error saving result for ${result.name}: ${err.message}`);
       }
     }
 
