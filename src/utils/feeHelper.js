@@ -1,71 +1,181 @@
 import { supabase } from "../services/supabase.js";
 
 /**
- * Calculate due amount from previous months for a student
- * @param {string} studentId - Student ID
- * @param {string} currentMonth - Current month (YYYY-MM format)
- * @returns {Promise<number>} Total due amount from previous months
+ * Calculate previous due amount for a student up to a given month
+ * @param {string} studentId - Student UUID
+ * @param {string} month - Month in YYYY-MM format
+ * @returns {Promise<number>} Previous due amount
  */
-export const calculatePreviousDue = async (studentId, currentMonth) => {
-  // Get all unpaid fees before current month
-  const { data: previousFees, error } = await supabase
-    .from("fees")
-    .select("total_fee, paid_amount")
-    .eq("student_id", studentId)
-    .lt("month", currentMonth)
-    .in("status", ["DUE", "PARTIAL"]);
+export const calculatePreviousDue = async (studentId, month) => {
+  try {
+    // Get all unpaid/partial fees before the given month
+    const [year, monthNum] = month.split("-").map(Number);
+    
+    // Get all fees before the given month
+    const { data: previousFees, error } = await supabase
+      .from("fees")
+      .select("total_fee, paid_amount")
+      .eq("student_id", studentId)
+      .lt("month", month)
+      .order("month", { ascending: false });
 
-  if (error) {
-    console.error("Error fetching previous dues:", error);
+    if (error) {
+      console.error("Error calculating previous due:", error);
+      return 0;
+    }
+
+    if (!previousFees || previousFees.length === 0) {
+      return 0;
+    }
+
+    // Calculate total due from previous months
+    let totalDue = 0;
+    for (const fee of previousFees) {
+      const remaining = (fee.total_fee || 0) - (fee.paid_amount || 0);
+      if (remaining > 0) {
+        totalDue += remaining;
+      }
+    }
+
+    return totalDue;
+  } catch (error) {
+    console.error("Error in calculatePreviousDue:", error);
     return 0;
   }
-
-  if (!previousFees || previousFees.length === 0) {
-    return 0;
-  }
-
-  // Calculate total due amount
-  const totalDue = previousFees.reduce((sum, fee) => {
-    const due = fee.total_fee - (fee.paid_amount || 0);
-    return sum + Math.max(0, due);
-  }, 0);
-
-  return totalDue;
 };
 
 /**
- * Get the previous month in YYYY-MM format
- * @param {string} currentMonth - Current month (YYYY-MM format)
- * @returns {string} Previous month in YYYY-MM format
+ * Calculate advance amount for a student
+ * @param {string} studentId - Student UUID
+ * @returns {Promise<number>} Advance amount
  */
-export const getPreviousMonth = (currentMonth) => {
-  const [year, month] = currentMonth.split("-").map(Number);
-  let prevYear = year;
-  let prevMonth = month - 1;
+export const calculateAdvance = async (studentId) => {
+  try {
+    // Get all fees with advance amounts
+    const { data: fees, error } = await supabase
+      .from("fees")
+      .select("advance")
+      .eq("student_id", studentId);
 
-  if (prevMonth === 0) {
-    prevMonth = 12;
-    prevYear = year - 1;
+    if (error) {
+      console.error("Error calculating advance:", error);
+      return 0;
+    }
+
+    if (!fees || fees.length === 0) {
+      return 0;
+    }
+
+    // Sum all advance amounts
+    const totalAdvance = fees.reduce((sum, fee) => {
+      return sum + (fee.advance || 0);
+    }, 0);
+
+    return totalAdvance;
+  } catch (error) {
+    console.error("Error in calculateAdvance:", error);
+    return 0;
   }
-
-  return `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
 };
 
 /**
- * Get the next month in YYYY-MM format
- * @param {string} currentMonth - Current month (YYYY-MM format)
- * @returns {string} Next month in YYYY-MM format
+ * Get total paid amount for a student
+ * @param {string} studentId - Student UUID
+ * @param {string} month - Optional month filter (YYYY-MM)
+ * @returns {Promise<number>} Total paid amount
  */
-export const getNextMonth = (currentMonth) => {
-  const [year, month] = currentMonth.split("-").map(Number);
-  let nextYear = year;
-  let nextMonth = month + 1;
+export const getTotalPaid = async (studentId, month = null) => {
+  try {
+    let query = supabase
+      .from("fees")
+      .select("paid_amount")
+      .eq("student_id", studentId);
 
-  if (nextMonth === 13) {
-    nextMonth = 1;
-    nextYear = year + 1;
+    if (month) {
+      query = query.eq("month", month);
+    }
+
+    const { data: fees, error } = await query;
+
+    if (error) {
+      console.error("Error getting total paid:", error);
+      return 0;
+    }
+
+    if (!fees || fees.length === 0) {
+      return 0;
+    }
+
+    const totalPaid = fees.reduce((sum, fee) => {
+      return sum + (fee.paid_amount || 0);
+    }, 0);
+
+    return totalPaid;
+  } catch (error) {
+    console.error("Error in getTotalPaid:", error);
+    return 0;
   }
+};
 
-  return `${nextYear}-${String(nextMonth).padStart(2, "0")}`;
+/**
+ * Calculate total fee for a student in a given month
+ * @param {string} studentId - Student UUID
+ * @param {string} month - Month in YYYY-MM format
+ * @returns {Promise<number>} Total fee amount
+ */
+export const getTotalFee = async (studentId, month) => {
+  try {
+    const { data: fee, error } = await supabase
+      .from("fees")
+      .select("total_fee")
+      .eq("student_id", studentId)
+      .eq("month", month)
+      .single();
+
+    if (error || !fee) {
+      return 0;
+    }
+
+    return fee.total_fee || 0;
+  } catch (error) {
+    console.error("Error in getTotalFee:", error);
+    return 0;
+  }
+};
+
+/**
+ * Get dues for a student
+ * @param {string} studentId - Student UUID
+ * @returns {Promise<number>} Total dues amount
+ */
+export const getDues = async (studentId) => {
+  try {
+    const { data: fees, error } = await supabase
+      .from("fees")
+      .select("total_fee, paid_amount")
+      .eq("student_id", studentId);
+
+    if (error) {
+      console.error("Error getting dues:", error);
+      return 0;
+    }
+
+    if (!fees || fees.length === 0) {
+      return 0;
+    }
+
+    let totalDues = 0;
+    for (const fee of fees) {
+      const remaining = (fee.total_fee || 0) - (fee.paid_amount || 0);
+      if (remaining > 0) {
+        totalDues += remaining;
+      }
+    }
+
+    return totalDues;
+  } catch (error) {
+    console.error("Error in getDues:", error);
+    return 0;
+  }
 };
 
