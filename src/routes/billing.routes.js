@@ -14,10 +14,10 @@ const router = express.Router();
  * Admin Only
  * Body: {
  *   class, section?, month,
- *   includeAnnualFee?, includeExamFee?, includeComputerFee?, includeOptionalFees?
+ *   includeAnnualFee?, includeExamFee?, includeComputerFee?
  * }
  */
-router.post("/generate-bulk", adminOnly, generateBulkBills);
+router.post("/generate-bulk", generateBulkBills);
 
 /**
  * GET /api/billing/bill/:id

@@ -1,12 +1,13 @@
 import { supabase } from "../services/supabase.js";
 import { calculatePreviousDue } from "../utils/feeHelper.js";
+import { adminOnly } from "../middleware/auth.middleware.js";
 
 /**
  * Generate bulk bills with checkbox options
  * POST /api/billing/generate-bulk
  * Body: {
  *   class: "Class Name",
- *   section?: "Section Name",
+ *   section?: "Section Name", // Optional, not required
  *   month: "YYYY-MM",
  *   includeAnnualFee: boolean,
  *   includeExamFee: boolean,
@@ -14,16 +15,18 @@ import { calculatePreviousDue } from "../utils/feeHelper.js";
  *   includeOptionalFees: boolean
  * }
  */
-export const generateBulkBills = async (req, res) => {
+// Add admin authorization middleware to bulk bill generation
+export const generateBulkBills = [
+  adminOnly,
+  async (req, res) => {
   try {
     const {
       class: className,
-      section,
+      // section removed, not required
       month,
       includeAnnualFee = false,
       includeExamFee = false,
       includeComputerFee = false,
-      includeOptionalFees = false,
     } = req.body;
 
     // Validation
@@ -42,15 +45,13 @@ export const generateBulkBills = async (req, res) => {
 
     const [year, monthNum] = month.split("-").map(Number);
 
-    // Get students in the class/section
+    // Get students in the class (section not required)
     let studentQuery = supabase
       .from("students")
-      .select("id, name, class, section, roll_no")
+      .select("id, name, class, roll_no")
       .eq("class", className);
 
-    if (section) {
-      studentQuery = studentQuery.eq("section", section);
-    }
+    // section filter removed
 
     const { data: students, error: studentsError } = await studentQuery;
 
@@ -63,21 +64,17 @@ export const generateBulkBills = async (req, res) => {
 
     if (!students || students.length === 0) {
       return res.status(404).json({
-        message: "No students found in this class/section",
+        message: "No students found in this class",
       });
     }
 
     // Get fee structures for the class
     let feeStructureQuery = supabase
-      .from("fee_structures")
+      .from("fee_structure")
       .select("*")
       .eq("class", className);
 
-    if (section) {
-      feeStructureQuery = feeStructureQuery.or(`section.eq.${section},section.is.null`);
-    } else {
-      feeStructureQuery = feeStructureQuery.is("section", null);
-    }
+    // section filter removed from fee structure query
 
     const { data: feeStructures, error: fsError } = await feeStructureQuery;
 
@@ -90,12 +87,15 @@ export const generateBulkBills = async (req, res) => {
 
     if (!feeStructures || feeStructures.length === 0) {
       return res.status(404).json({
-        message: "No fee structure found for this class/section",
+        message: "No fee structure found for this class",
       });
     }
 
     // Filter fee structures based on checkbox options
     const selectedFees = feeStructures.filter((fs) => {
+      if (!fs.fee_name || typeof fs.fee_name !== "string") {
+        return false;
+      }
       const feeNameLower = fs.fee_name.toLowerCase();
 
       // Always include tuition fee (required)
@@ -113,11 +113,6 @@ export const generateBulkBills = async (req, res) => {
       }
 
       if (includeComputerFee && feeNameLower.includes("computer")) {
-        return true;
-      }
-
-      // Optional fees (is_optional = true)
-      if (includeOptionalFees && fs.is_optional) {
         return true;
       }
 
@@ -241,7 +236,7 @@ export const generateBulkBills = async (req, res) => {
       message: "Bulk bills generation completed",
       month,
       class: className,
-      section: section || "All",
+      // section removed, not required
       totalStudents: students.length,
       successCount,
       errorCount,
@@ -254,7 +249,8 @@ export const generateBulkBills = async (req, res) => {
       error: error.message,
     });
   }
-};
+  }
+];
 
 /**
  * Get a single bill by ID
@@ -282,7 +278,7 @@ export const getBill = async (req, res) => {
           father_name,
           roll_no,
           class,
-          section
+          // section removed
         )
       `
       )
@@ -347,11 +343,11 @@ export const getBill = async (req, res) => {
 
 /**
  * Download bills as PDF
- * GET /api/billing/download?class=&month=&section=
+ * GET /api/billing/download?class=&month=
  */
 export const downloadBills = async (req, res) => {
   try {
-    const { class: className, month, section } = req.query;
+    const { class: className, month } = req.query;
 
     if (!className || !month) {
       return res.status(400).json({
@@ -370,13 +366,13 @@ export const downloadBills = async (req, res) => {
     const { generateBillsPDFForBilling } = await import("../services/pdfGenerator.js");
 
     // Generate PDF
-    const pdfBuffer = await generateBillsPDFForBilling(className, month, section);
+    const pdfBuffer = await generateBillsPDFForBilling(className, month);
 
     // Set response headers
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="bills-${className}-${month}${section ? `-${section}` : ""}.pdf"`
+      `attachment; filename="bills-${className}-${month}.pdf"`
     );
 
     // Send PDF

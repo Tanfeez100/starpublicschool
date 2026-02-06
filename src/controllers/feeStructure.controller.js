@@ -7,31 +7,33 @@ import { supabase } from "../services/supabase.js";
  */
 export const createFeeStructure = async (req, res) => {
   try {
-    const { class: className, section, fee_name, fee_amount, is_optional } = req.body;
+    const { class: className, tuition_fee, exam_fee, annual_fee, computer_fee } = req.body;
 
     // Validation
-    if (!className || !fee_name || fee_amount === undefined) {
+    if (!className || tuition_fee === undefined || exam_fee === undefined || annual_fee === undefined || computer_fee === undefined) {
       return res.status(400).json({
-        message: "class, fee_name, and fee_amount are required",
+        message: "class, tuition_fee, exam_fee, annual_fee, and computer_fee are required",
       });
     }
 
-    if (typeof fee_amount !== "number" || fee_amount < 0) {
+    // All fees must be non-negative numbers
+    const fees = [tuition_fee, exam_fee, annual_fee, computer_fee];
+    if (fees.some(f => typeof f !== "number" || f < 0)) {
       return res.status(400).json({
-        message: "fee_amount must be a non-negative number",
+        message: "All fee fields must be non-negative numbers",
       });
     }
 
     // Create fee structure
     const { data, error } = await supabase
-      .from("fee_structures")
+      .from("fee_structure")
       .insert([
         {
           class: className,
-          section: section || null,
-          fee_name,
-          fee_amount: parseFloat(fee_amount),
-          is_optional: is_optional || false,
+          tuition_fee: parseFloat(tuition_fee),
+          exam_fee: parseFloat(exam_fee),
+          annual_fee: parseFloat(annual_fee),
+          computer_fee: parseFloat(computer_fee),
         },
       ])
       .select()
@@ -64,24 +66,17 @@ export const createFeeStructure = async (req, res) => {
  */
 export const getFeeStructures = async (req, res) => {
   try {
-    const { class: className, section } = req.query;
+    const { class: className } = req.query;
 
-    let query = supabase.from("fee_structures").select("*");
+    let query = supabase.from("fee_structure").select("*");
 
     // Filter by class if provided
     if (className) {
       query = query.eq("class", className);
     }
 
-    // Filter by section if provided
-    if (section) {
-      query = query.eq("section", section);
-    }
-
-    // Order by class, section, and fee_name
+    // Order by class
     query = query.order("class", { ascending: true });
-    query = query.order("section", { ascending: true });
-    query = query.order("fee_name", { ascending: true });
 
     const { data, error } = await query;
 
@@ -115,7 +110,7 @@ export const getFeeStructures = async (req, res) => {
 export const updateFeeStructure = async (req, res) => {
   try {
     const { id } = req.params;
-    const { class: className, section, fee_name, fee_amount, is_optional } = req.body;
+    const { class: className, tuition_fee, exam_fee, annual_fee, computer_fee } = req.body;
 
     if (!id) {
       return res.status(400).json({
@@ -126,17 +121,30 @@ export const updateFeeStructure = async (req, res) => {
     // Build update object
     const updateData = {};
     if (className !== undefined) updateData.class = className;
-    if (section !== undefined) updateData.section = section;
-    if (fee_name !== undefined) updateData.fee_name = fee_name;
-    if (fee_amount !== undefined) {
-      if (typeof fee_amount !== "number" || fee_amount < 0) {
-        return res.status(400).json({
-          message: "fee_amount must be a non-negative number",
-        });
+    if (tuition_fee !== undefined) {
+      if (typeof tuition_fee !== "number" || tuition_fee < 0) {
+        return res.status(400).json({ message: "tuition_fee must be a non-negative number" });
       }
-      updateData.fee_amount = parseFloat(fee_amount);
+      updateData.tuition_fee = parseFloat(tuition_fee);
     }
-    if (is_optional !== undefined) updateData.is_optional = is_optional;
+    if (exam_fee !== undefined) {
+      if (typeof exam_fee !== "number" || exam_fee < 0) {
+        return res.status(400).json({ message: "exam_fee must be a non-negative number" });
+      }
+      updateData.exam_fee = parseFloat(exam_fee);
+    }
+    if (annual_fee !== undefined) {
+      if (typeof annual_fee !== "number" || annual_fee < 0) {
+        return res.status(400).json({ message: "annual_fee must be a non-negative number" });
+      }
+      updateData.annual_fee = parseFloat(annual_fee);
+    }
+    if (computer_fee !== undefined) {
+      if (typeof computer_fee !== "number" || computer_fee < 0) {
+        return res.status(400).json({ message: "computer_fee must be a non-negative number" });
+      }
+      updateData.computer_fee = parseFloat(computer_fee);
+    }
     updateData.updated_at = new Date().toISOString();
 
     if (Object.keys(updateData).length === 1) {
@@ -148,7 +156,7 @@ export const updateFeeStructure = async (req, res) => {
 
     // Update fee structure
     const { data, error } = await supabase
-      .from("fee_structures")
+      .from("fee_structure")
       .update(updateData)
       .eq("id", id)
       .select()
@@ -194,12 +202,12 @@ export const deleteFeeStructure = async (req, res) => {
       });
     }
 
-    // Check if fee structure exists
-    const { data: existing, error: fetchError } = await supabase
-      .from("fee_structures")
-      .select("id")
-      .eq("id", id)
-      .single();
+      // Check if fee structure exists
+      const { data: existing, error: fetchError } = await supabase
+        .from("fee_structure")
+        .select("id")
+        .eq("id", id)
+        .single();
 
     if (fetchError || !existing) {
       return res.status(404).json({
@@ -208,7 +216,7 @@ export const deleteFeeStructure = async (req, res) => {
     }
 
     // Delete fee structure
-    const { error } = await supabase.from("fee_structures").delete().eq("id", id);
+      const { error } = await supabase.from("fee_structure").delete().eq("id", id);
 
     if (error) {
       console.error("Error deleting fee structure:", error);
