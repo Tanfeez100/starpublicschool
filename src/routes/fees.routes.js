@@ -36,7 +36,7 @@ router.get("/list", adminOrTeacher, getFeeList);
  * POST /api/fees/pay
  * Record fee payment
  * Admin Only
- * Body: { class, roll_number, amount_paid, payment_mode, payment_date?, month? }
+ * Body: { class, section, roll_number, amount_paid, payment_mode, payment_date?, month? }
  */
 router.post("/pay", adminOnly, payFee);
 

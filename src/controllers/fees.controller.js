@@ -336,17 +336,17 @@ export const getFeeList = async (req, res) => {
  * Record fee payment
  * POST /api/fees/pay
  * Body: {
- *   class, roll_number, amount_paid, payment_mode, payment_date?, month?
+ *   class, section, roll_number, amount_paid, payment_mode, payment_date?, month?
  * }
  */
 export const payFee = async (req, res) => {
   try {
-    const { class: className, roll_number, amount_paid, payment_mode, payment_date, month } = req.body;
+    const { class: className, section, roll_number, amount_paid, payment_mode, payment_date, month } = req.body;
 
     // Validation
-    if (!className || !roll_number || !amount_paid || !payment_mode) {
+    if (!className || !section || !roll_number || !amount_paid || !payment_mode) {
       return res.status(400).json({
-        message: "class, roll_number, amount_paid, and payment_mode are required",
+        message: "class, section, roll_number, amount_paid, and payment_mode are required",
       });
     }
 
@@ -363,17 +363,18 @@ export const payFee = async (req, res) => {
       });
     }
 
-    // Find student by class and roll_number
+    // Find student by class, section, and roll_number
     const { data: student, error: studentError } = await supabase
       .from("students")
       .select("*")
       .eq("class", className)
+      .eq("section", section)
       .eq("roll_no", roll_number)
       .single();
 
     if (studentError || !student) {
       return res.status(404).json({
-        message: "Student not found with the provided class and roll number",
+        message: "Student not found with the provided class, section, and roll number",
       });
     }
 
@@ -388,55 +389,52 @@ export const payFee = async (req, res) => {
 
     const [year, monthNum] = billMonth.split("-").map(Number);
 
-    // Find or get the latest bill for this student
-    let bill;
-    let bill_id;
+    // Find fee record in fees table for this student and month
+    let feeRecord;
 
     if (month) {
-      // Get bill for specific month
-      const { data: existingBill, error: billError } = await supabase
-        .from("fee_bills")
+      // Get fee for specific month
+      const { data: existingFee, error: feeError } = await supabase
+        .from("fees")
         .select("*")
         .eq("student_id", student_id)
         .eq("month", billMonth)
         .single();
 
-      if (billError && billError.code !== "PGRST116") {
+      if (feeError && feeError.code !== "PGRST116") {
         return res.status(500).json({
-          message: "Failed to fetch bill",
-          error: billError.message,
+          message: "Failed to fetch fee record",
+          error: feeError.message,
         });
       }
 
-      bill = existingBill;
-      bill_id = existingBill?.id;
+      feeRecord = existingFee;
     } else {
-      // Get the latest bill (most recent month)
-      const { data: latestBill, error: billError } = await supabase
-        .from("fee_bills")
+      // Get the latest fee (most recent month)
+      const { data: latestFee, error: feeError } = await supabase
+        .from("fees")
         .select("*")
         .eq("student_id", student_id)
         .order("month", { ascending: false })
         .limit(1)
         .single();
 
-      if (billError && billError.code !== "PGRST116") {
+      if (feeError && feeError.code !== "PGRST116") {
         return res.status(500).json({
-          message: "Failed to fetch bill",
-          error: billError.message,
+          message: "Failed to fetch fee record",
+          error: feeError.message,
         });
       }
 
-      bill = latestBill;
-      bill_id = latestBill?.id;
+      feeRecord = latestFee;
 
-      if (latestBill) {
-        billMonth = latestBill.month;
+      if (latestFee) {
+        billMonth = latestFee.month;
       }
     }
 
-    // If no bill exists, return error (bill should be generated first)
-    if (!bill || !bill_id) {
+    // If no fee record exists, return error (bill should be generated first)
+    if (!feeRecord) {
       return res.status(404).json({
         message: `No bill found for this student. Please generate bill first for month ${billMonth}`,
         student: {
@@ -448,90 +446,113 @@ export const payFee = async (req, res) => {
       });
     }
 
-    // Get existing payments for this bill
-    const { data: existingPayments, error: paymentsError } = await supabase
-      .from("fee_payments")
-      .select("amount_paid")
-      .eq("bill_id", bill_id);
+    // Get current paid amount and total fee from fee record
+    const currentPaidAmount = feeRecord.paid_amount || 0;
+    const totalFee = feeRecord.total_fee || 0;
+    const remainingAmount = totalFee - currentPaidAmount;
+    
+    // Calculate how much goes to fee payment and how much is advance
+    // Example: Total Fee = 5000, Already Paid = 0, Payment = 8000
+    // amountForFee = 5000 (fee fully paid)
+    // advanceAmount = 3000 (only excess goes to advance_ledger)
+    let amountForFee = 0;
+    let advanceAmount = 0;
+    
+    if (amount_paid <= remainingAmount) {
+      // Payment is within remaining fee amount - no advance
+      amountForFee = amount_paid;
+      advanceAmount = 0;
+    } else {
+      // Payment exceeds remaining fee amount - only excess goes to advance
+      // Example: remainingAmount = 5000, amount_paid = 8000
+      // amountForFee = 5000 (fee payment)
+      // advanceAmount = 3000 (ONLY this excess goes to advance_ledger, NOT 8000)
+      amountForFee = remainingAmount;
+      advanceAmount = amount_paid - remainingAmount;
+    }
+    
+    const newTotalPaid = currentPaidAmount + amountForFee;
+    const newDueAmount = totalFee - newTotalPaid;
 
-    if (paymentsError) {
-      return res.status(500).json({
-        message: "Failed to fetch existing payments",
-        error: paymentsError.message,
-      });
+    // Determine new status
+    let newStatus = "DUE";
+    if (newTotalPaid >= totalFee) {
+      newStatus = "PAID";
+    } else if (newTotalPaid > 0) {
+      newStatus = "PARTIAL";
+    } else if (newTotalPaid < 0) {
+      newStatus = "ADVANCE";
     }
 
-    const totalPaid = existingPayments?.reduce((sum, p) => sum + (p.amount_paid || 0), 0) || 0;
-    const newTotalPaid = totalPaid + amount_paid;
+    // Update fee record in fees table
+    const updateData = {
+      paid_amount: newTotalPaid,
+      due_amount: newDueAmount,
+      status: newStatus,
+      advance: advanceAmount > 0 ? (feeRecord.advance || 0) + advanceAmount : (feeRecord.advance || 0),
+      updated_at: new Date().toISOString(),
+    };
 
-    // Check if payment exceeds bill amount
-    if (newTotalPaid > bill.total_amount) {
-      return res.status(400).json({
-        message: `Payment amount exceeds bill total. Bill: ${bill.total_amount}, Already paid: ${totalPaid}, Attempted: ${amount_paid}`,
-      });
+    // If payment is fully paid, set paid_on date
+    if (newStatus === "PAID" && !feeRecord.paid_on) {
+      updateData.paid_on = payment_date || new Date().toISOString();
     }
 
-    // Create payment record
-    const { data: payment, error: paymentError } = await supabase
-      .from("fee_payments")
-      .insert([
-        {
-          student_id,
-          bill_id,
-          amount_paid: parseFloat(amount_paid),
-          payment_mode: payment_mode.toLowerCase(),
-          payment_date: payment_date || new Date().toISOString().split("T")[0],
-        },
-      ])
+    const { data: updatedFee, error: updateError } = await supabase
+      .from("fees")
+      .update(updateData)
+      .eq("id", feeRecord.id)
       .select()
       .single();
 
-    if (paymentError) {
+    if (updateError) {
       return res.status(500).json({
-        message: "Failed to record payment",
-        error: paymentError.message,
+        message: "Failed to update fee record",
+        error: updateError.message,
       });
     }
 
-    // Update bill status
-    let newStatus = "unpaid";
-    if (newTotalPaid >= bill.total_amount) {
-      newStatus = "paid";
-    } else if (newTotalPaid > 0) {
-      newStatus = "partial";
+    // Save ONLY the advance amount (excess) in advance_ledger, NOT the total payment
+    // Example: If payment is 8000 and fee is 5000, only 3000 goes to advance_ledger
+    let advanceLedgerEntry = null;
+    if (advanceAmount > 0) {
+      const [yearNum, monthNum] = billMonth.split("-").map(Number);
+      const { data: advanceEntry, error: advanceError } = await supabase
+        .from("advance_ledger")
+        .insert([
+          {
+            student_id,
+            bill_id: null, // No bill_id since we're using fees table
+            amount: parseFloat(advanceAmount), // ONLY advance amount (excess), NOT total payment
+            payment_mode: payment_mode.toLowerCase(),
+            payment_date: payment_date || new Date().toISOString().split("T")[0],
+            month: billMonth,
+            year: yearNum,
+            status: "active",
+          },
+        ])
+        .select()
+        .single();
+
+      if (advanceError) {
+        console.error("Failed to save advance in ledger:", advanceError);
+        // Continue even if advance ledger save fails - payment was recorded
+      } else {
+        advanceLedgerEntry = advanceEntry;
+      }
     }
 
-    const { error: updateError } = await supabase
-      .from("fee_bills")
-      .update({
-        bill_status: newStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", bill_id);
+    // Get total active advance for the student from advance_ledger
+    const { data: activeAdvances, error: advancesError } = await supabase
+      .from("advance_ledger")
+      .select("amount")
+      .eq("student_id", student_id)
+      .eq("status", "active");
 
-    if (updateError) {
-      console.error("Failed to update bill status:", updateError);
-      // Payment was recorded, but status update failed - non-critical
+    let totalPaidAdvance = 0;
+    if (activeAdvances && !advancesError) {
+      totalPaidAdvance = activeAdvances.reduce((sum, a) => sum + (a.amount || 0), 0);
     }
-
-    // Get updated bill with items
-    const { data: updatedBill, error: billFetchError } = await supabase
-      .from("fee_bills")
-      .select(
-        `
-        *,
-        fee_bill_items (*)
-      `
-      )
-      .eq("id", bill_id)
-      .single();
-
-    // Get all payments for this bill
-    const { data: allPayments, error: allPaymentsError } = await supabase
-      .from("fee_payments")
-      .select("*")
-      .eq("bill_id", bill_id)
-      .order("payment_date", { ascending: false });
 
     // Prepare student details (excluding marks)
     const studentDetails = {
@@ -552,30 +573,39 @@ export const payFee = async (req, res) => {
 
     res.status(201).json({
       message: "Payment recorded successfully",
-      bill_id: bill_id,
+      fee_id: feeRecord.id,
       student: studentDetails,
-      bill: {
-        id: updatedBill?.id || bill_id,
-        month: updatedBill?.month || billMonth,
-        year: updatedBill?.year || year,
-        total_amount: updatedBill?.total_amount || bill.total_amount,
-        bill_status: newStatus,
-        items: updatedBill?.fee_bill_items || [],
-        created_at: updatedBill?.created_at || bill.created_at,
+      fee: {
+        id: updatedFee?.id || feeRecord.id,
+        month: updatedFee?.month || billMonth,
+        total_fee: updatedFee?.total_fee || totalFee,
+        paid_amount: updatedFee?.paid_amount || newTotalPaid,
+        due_amount: updatedFee?.due_amount || newDueAmount,
+        status: newStatus,
+        tuition_fee: updatedFee?.tuition_fee,
+        exam_fee: updatedFee?.exam_fee,
+        annual_fee: updatedFee?.annual_fee,
+        computer_fee: updatedFee?.computer_fee,
+        transport_fee: updatedFee?.transport_fee,
+        previous_due: updatedFee?.previous_due,
+        breakdown: updatedFee?.breakdown,
+        created_at: updatedFee?.created_at || feeRecord.created_at,
       },
       payment: {
-        id: payment.id,
-        amount_paid: payment.amount_paid,
-        payment_mode: payment.payment_mode,
-        payment_date: payment.payment_date,
-        created_at: payment.created_at,
+        amount_paid: amount_paid,
+        payment_mode: payment_mode.toLowerCase(),
+        payment_date: payment_date || new Date().toISOString().split("T")[0],
       },
       payment_summary: {
         total_paid: newTotalPaid,
-        remaining: (updatedBill?.total_amount || bill.total_amount) - newTotalPaid,
-        bill_status: newStatus,
+        remaining: newDueAmount > 0 ? newDueAmount : 0,
+        status: newStatus,
+        advance: advanceAmount, // Advance amount from this payment
+        total_paid_advance: totalPaidAdvance, // Total active advance for student
+        amount_for_fee: amountForFee, // Amount applied to fee
+        amount_as_advance: advanceAmount, // Amount saved as advance
       },
-      all_payments: allPayments || [],
+      advance_ledger_entry: advanceLedgerEntry, // Advance ledger entry if created
     });
   } catch (error) {
     console.error("Error recording payment:", error);

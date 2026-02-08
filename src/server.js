@@ -9,6 +9,7 @@ import feeStructureRoutes from "./routes/feeStructure.routes.js";
 import billingRoutes from "./routes/billing.routes.js";
 import feesRoutes from "./routes/fees.routes.js";
 import invoiceRoutes from "./routes/invoice.routes.js";
+import megaRoutes from "./routes/mega.routes.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
 console.log(
@@ -29,6 +30,9 @@ app.use("/api/fee-structure", feeStructureRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/fees", feesRoutes);
 app.use("/api/invoice", invoiceRoutes);
+
+// MEGA Image Storage Routes
+app.use("/api/mega", megaRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
