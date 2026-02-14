@@ -20,7 +20,7 @@ const supabaseAdmin = createClient(
  */
 export const generateBillsPDFController = async (req, res) => {
   try {
-    const { month } = req.query;
+    const { month, class: className } = req.query;
 
     if (!month) {
       return res.status(400).json({
@@ -36,8 +36,10 @@ export const generateBillsPDFController = async (req, res) => {
       });
     }
 
-    // Generate PDF
-    const pdfBuffer = await generateBillsPDF(month);
+    const year = parseInt(month.split('-')[0], 10);
+
+    // Generate PDF (optionally restricted to a class)
+    const pdfBuffer = await generateBillsPDF(month, className);
 
     // Set response headers
     res.setHeader("Content-Type", "application/pdf");
@@ -64,7 +66,7 @@ export const generateBillsPDFController = async (req, res) => {
  */
 export const generateBillsForAll = async (req, res) => {
   try {
-    const { month } = req.body;
+    const { month, include_exam_fee = false, include_annual_fee = false, include_computer_fee = false } = req.body;
 
     if (!month) {
       return res.status(400).json({
@@ -79,12 +81,15 @@ export const generateBillsForAll = async (req, res) => {
       });
     }
 
-    // Using supabase service with service role key (bypasses RLS)
+    const year = parseInt(month.split('-')[0], 10);
 
-    // Get all students with transport info
+    // Prevent generating or editing bills for a closed month
+    const { data: closedRow } = await supabaseAdmin.from('month_closures').select('id').eq('month', month).maybeSingle();
+    if (closedRow) return res.status(400).json({ message: `Bills for month ${month} are closed and cannot be created/edited` });
+
     const { data: students, error: studentsError } = await supabaseAdmin
       .from("students")
-      .select("id, class, uses_transport, transport_charge");
+      .select("id, name, class, uses_transport, transport_charge");
 
     if (studentsError) {
       return res.status(500).json({
@@ -99,9 +104,8 @@ export const generateBillsForAll = async (req, res) => {
       });
     }
 
-    // Get all fee structures
     const { data: feeStructures, error: fsError } = await supabaseAdmin
-      .from("fee_structure")
+      .from("fee_structures")
       .select("*");
 
     if (fsError) {
@@ -111,121 +115,54 @@ export const generateBillsForAll = async (req, res) => {
       });
     }
 
-    // Create a map of class to fee structure
     const feeStructureMap = {};
     feeStructures.forEach((fs) => {
       feeStructureMap[fs.class] = fs;
     });
 
-    let successCount = 0;
-    let errorCount = 0;
-    const errors = [];
-
-    // Generate fees for all students
     const feePromises = students.map(async (student) => {
       const feeStructure = feeStructureMap[student.class];
 
       if (!feeStructure) {
-        errorCount++;
-        errors.push(`No fee structure for class ${student.class}`);
         return;
       }
 
-      try {
-        // Extract fees from fee structure
-        const tuitionFee = parseFloat(feeStructure.tuition_fee || 0);
-        const examFee = parseFloat(feeStructure.exam_fee || 0);
-        const annualFee = parseFloat(feeStructure.annual_fee || 0);
-        const computerFee = parseFloat(feeStructure.computer_fee || 0);
+      const tuitionFee = parseFloat(feeStructure.tuition_fee || 0);
+      const examFee = parseFloat(feeStructure.exam_fee || 0);
+      const annualFee = parseFloat(feeStructure.annual_fee || 0);
+      const computerFee = parseFloat(feeStructure.computer_fee || 0);
+      const transportFee = student.uses_transport && student.transport_charge ? parseFloat(student.transport_charge) : 0;
 
-        // Calculate transport fee if student uses transport
-        const transportFee = student.uses_transport && student.transport_charge 
-          ? parseFloat(student.transport_charge) 
-          : 0;
+      const currentMonthFees = tuitionFee
+        + (include_exam_fee ? examFee : 0)
+        + (include_annual_fee ? annualFee : 0)
+        + (include_computer_fee ? computerFee : 0)
+        + transportFee;
 
-        const previousDue = await calculatePreviousDue(student.id, month);
-        const currentMonthFees = tuitionFee + examFee + annualFee + computerFee + transportFee;
-        const totalFee = currentMonthFees + previousDue;
+      const totalFee = currentMonthFees;
 
-        // Check if fee already exists
-        const { data: existingFee } = await supabaseAdmin
-          .from("fees")
-          .select("paid_amount, due_amount, status")
-          .eq("student_id", student.id)
-          .eq("month", month)
-          .maybeSingle();
+      const { data: newBill } = await supabaseAdmin
+        .from("fee_bills")
+        .insert([{ student_id: student.id, month, year, total_amount: totalFee, bill_status: "DUE" }])
+        .select()
+        .maybeSingle();
 
-        // Calculate due amount
-        const paidAmount = existingFee?.paid_amount || 0;
-        const dueAmount = totalFee - paidAmount;
+      const billId = newBill.id;
 
-        // Determine status
-        let status = "DUE";
-        if (paidAmount >= totalFee) {
-          status = "PAID";
-        } else if (paidAmount > 0) {
-          status = "PARTIAL";
-        } else if (paidAmount < 0) {
-          status = "ADVANCE";
-        }
+      const items = [
+        { bill_id: billId, fee_name: "Tuition Fee", amount: tuitionFee },
+      ];
+      if (include_exam_fee) items.push({ bill_id: billId, fee_name: "Exam Fee", amount: examFee });
+      if (include_annual_fee) items.push({ bill_id: billId, fee_name: "Annual Fee", amount: annualFee });
+      if (include_computer_fee) items.push({ bill_id: billId, fee_name: "Computer Fee", amount: computerFee });
+      if (transportFee > 0) items.push({ bill_id: billId, fee_name: "Transport Fee", amount: transportFee });
 
-        const feeData = {
-          student_id: student.id,
-          month,
-          tuition_fee: tuitionFee,
-          exam_fee: examFee,
-          annual_fee: annualFee,
-          computer_fee: computerFee,
-          transport_fee: transportFee,
-          previous_due: previousDue,
-          total_fee: totalFee,
-          paid_amount: paidAmount,
-          due_amount: dueAmount,
-          status: status,
-          fine: 0,
-          fine_amount: 0,
-          fine_waived: false,
-          fine_waived_amount: 0,
-          advance: 0,
-          breakdown: {
-            tuition_fee: tuitionFee,
-            exam_fee: examFee,
-            annual_fee: annualFee,
-            computer_fee: computerFee,
-            transport_fee: transportFee,
-            previous_due: previousDue,
-          },
-        };
-
-        const { error } = await supabaseAdmin
-          .from("fees")
-          .upsert(feeData, { 
-            onConflict: "student_id,month",
-            ignoreDuplicates: false 
-          });
-
-        if (error) {
-          errorCount++;
-          errors.push(`Failed for student ${student.id}: ${error.message}`);
-        } else {
-          successCount++;
-        }
-      } catch (error) {
-        errorCount++;
-        errors.push(`Error processing student ${student.id}: ${error.message}`);
-      }
+      await supabaseAdmin.from("fee_bill_items").insert(items);
     });
 
     await Promise.all(feePromises);
 
-    res.json({
-      message: `Bills generation completed`,
-      month,
-      totalStudents: students.length,
-      successCount,
-      errorCount,
-      errors: errors.length > 0 ? errors : undefined,
-    });
+    res.json({ message: "Bills generated successfully" });
   } catch (error) {
     console.error("Error generating bills:", error);
     res.status(500).json({
@@ -242,7 +179,7 @@ export const generateBillsForAll = async (req, res) => {
  */
 export const generateBillsForClass = async (req, res) => {
   try {
-    const { class: className, month } = req.body;
+    const { class: className, month, include_exam_fee = false, include_annual_fee = false, include_computer_fee = false } = req.body;
 
     if (!className || !month) {
       return res.status(400).json({
@@ -257,9 +194,12 @@ export const generateBillsForClass = async (req, res) => {
       });
     }
 
-    // Using supabase service with service role key (bypasses RLS)
+    const year = parseInt(month.split('-')[0], 10);
 
-    // Get all students in the class with transport info
+    // Prevent generating or editing bills for a closed month
+    const { data: closedRow } = await supabaseAdmin.from('month_closures').select('id').eq('month', month).maybeSingle();
+    if (closedRow) return res.status(400).json({ message: `Bills for month ${month} are closed and cannot be created/edited` });
+
     const { data: students, error: studentsError } = await supabaseAdmin
       .from("students")
       .select("id, class, uses_transport, transport_charge")
@@ -278,26 +218,57 @@ export const generateBillsForClass = async (req, res) => {
       });
     }
 
-    // Get fee structure for the class
-    const { data: feeStructure, error: fsError } = await supabaseAdmin
-      .from("fee_structure")
-      .select("*")
-      .eq("class", className)
-      .single();
+    // Fetch normalized fee_structure rows for the class (one row per fee type)
+    const { data: feeRows, error: fsError } = await supabaseAdmin
+      .from('fee_structures')
+      .select('fee_name, fee_amount, period')
+      .eq('class', className);
 
-    if (fsError || !feeStructure) {
-      return res.status(404).json({
-        message: "Fee structure not found for this class",
+    if (fsError) {
+      return res.status(500).json({ message: 'Failed to fetch fee structures', error: fsError.message });
+    }
+    if (!feeRows || feeRows.length === 0) {
+      return res.status(404).json({ message: 'Fee structure not found for this class' });
+    }
+
+    // Derive component sums from normalized rows
+    let tuitionFee = 0;
+    let examFee = 0;
+    let annualFee = 0;
+    let computerFee = 0;
+    feeRows.forEach(r => {
+      const name = (r.fee_name || '').toLowerCase();
+      const amt = parseFloat(r.fee_amount || 0) || 0;
+      if (name.includes('tuition')) tuitionFee += amt;
+      else if (name.includes('exam')) examFee += amt;
+      else if (name.includes('annual')) annualFee += amt;
+      else if (name.includes('computer')) computerFee += amt;
+    });
+
+    const { data: activeAdvRows } = await supabaseAdmin
+      .from("advance_ledger")
+      .select("student_id, amount")
+      .in("student_id", students.map(s => s.id))
+      .eq("status", "active");
+
+    const advancesMap = {};
+    if (activeAdvRows && activeAdvRows.length > 0) {
+      activeAdvRows.forEach(a => {
+        const sid = a.student_id;
+        advancesMap[sid] = (advancesMap[sid] || 0) + (parseFloat(a.amount) || 0);
       });
     }
 
-    // Extract fees from fee structure
-    const tuitionFee = parseFloat(feeStructure.tuition_fee || 0);
-    const examFee = parseFloat(feeStructure.exam_fee || 0);
-    const annualFee = parseFloat(feeStructure.annual_fee || 0);
-    const computerFee = parseFloat(feeStructure.computer_fee || 0);
+    // Pre-fetch existing bills/payments for this class & month so individual loop doesn't re-query
+    const { data: existingBills } = await supabaseAdmin.from('fee_bills').select('id, student_id, total_amount').in('student_id', students.map(s => s.id)).eq('month', month);
+    const billsMap = {};
+    (existingBills || []).forEach(b => { billsMap[b.student_id] = b; });
 
-    // Generate fees for all students
+    const billIds = (existingBills || []).map(b => b.id);
+    const { data: paymentsRows } = await supabase.from('fee_payments').select('bill_id, amount_paid').in('bill_id', billIds || []);
+    const paymentsMap = {};
+    (paymentsRows || []).forEach(p => { paymentsMap[p.bill_id] = (paymentsMap[p.bill_id] || 0) + (parseFloat(p.amount_paid || 0)); });
+
     const feePromises = students.map(async (student) => {
       try {
         // Calculate previous due
@@ -308,73 +279,130 @@ export const generateBillsForClass = async (req, res) => {
           ? parseFloat(student.transport_charge) 
           : 0;
 
-        // Calculate total fee
-        const currentMonthFees = tuitionFee + examFee + annualFee + computerFee + transportFee;
+        // Calculate total fee using include flags
+        console.log(`Generating bill for student ${student.id} (class ${className}) - flags: include_exam_fee=${include_exam_fee}, include_annual_fee=${include_annual_fee}, include_computer_fee=${include_computer_fee}`);
+        const currentMonthFees = tuitionFee
+          + (include_exam_fee ? examFee : 0)
+          + (include_annual_fee ? annualFee : 0)
+          + (include_computer_fee ? computerFee : 0)
+          + transportFee;
         const totalFee = currentMonthFees + previousDue;
 
-        // Check if fee already exists
-        const { data: existingFee } = await supabaseAdmin
-          .from("fees")
-          .select("paid_amount, due_amount, status")
-          .eq("student_id", student.id)
-          .eq("month", month)
-          .maybeSingle();
+        // Prefer `fee_bills` for current bill state
+        const existingBill = billsMap[student.id] || null;
+        let billId;
 
-        // Calculate due amount
-        const paidAmount = existingFee?.paid_amount || 0;
-        const dueAmount = totalFee - paidAmount;
+        if (existingBill) {
+          billId = existingBill.id;
+          const { error: updateError } = await supabase
+            .from('fee_bills')
+            .update({ total_amount: totalFee, year, updated_at: new Date().toISOString() })
+            .eq('id', billId);
 
-        // Determine status
-        let status = "DUE";
-        if (paidAmount >= totalFee) {
-          status = "PAID";
-        } else if (paidAmount > 0) {
-          status = "PARTIAL";
-        } else if (paidAmount < 0) {
-          status = "ADVANCE";
+          if (updateError) {
+            errorCount++;
+            errors.push(`Failed to update bill for ${student.name}: ${updateError.message}`);
+            return;
+          }
+
+          // Remove old items
+          await supabase.from('fee_bill_items').delete().eq('bill_id', billId);
+        } else {
+          const { data: newBill, error: createError } = await supabase
+            .from('fee_bills')
+            .insert([{ student_id: student.id, month, year, total_amount: totalFee, bill_status: 'unpaid' }])
+            .select()
+            .maybeSingle();
+
+          if (createError) {
+            // Handle unique-violation races gracefully by fetching the existing bill
+            console.warn(`create bill error for ${student.id}:`, createError.message);
+            const { data: existing, error: fetchErr } = await supabase
+              .from('fee_bills')
+              .select('id')
+              .eq('student_id', student.id)
+              .eq('month', month)
+              .single();
+            if (fetchErr || !existing) {
+              errorCount++;
+              errors.push(`Failed to create or find bill for ${student.name}: ${createError.message}`);
+              return;
+            }
+
+            billId = existing.id;
+          } else {
+            billId = newBill.id;
+          }
         }
 
-        // Prepare fee data according to fees table structure
-        const feeData = {
-          student_id: student.id,
-          month,
-          tuition_fee: tuitionFee,
-          exam_fee: examFee,
-          annual_fee: annualFee,
-          computer_fee: computerFee,
-          transport_fee: transportFee,
-          previous_due: previousDue,
-          total_fee: totalFee,
-          paid_amount: paidAmount,
-          due_amount: dueAmount,
-          status: status,
-          fine: 0,
-          fine_amount: 0,
-          fine_waived: false,
-          fine_waived_amount: 0,
-          advance: 0,
-          breakdown: {
-            tuition_fee: tuitionFee,
-            exam_fee: examFee,
-            annual_fee: annualFee,
-            computer_fee: computerFee,
-            transport_fee: transportFee,
-            previous_due: previousDue,
-          },
-        };
+        // Auto-application of advances during bill generation has been removed.
+        // Advances must be applied explicitly via payments (payment_mode = 'advance_adjustment') or admin adjustments.
+        // (availableAdvance / remainingDue calculations intentionally omitted)
 
-        // Upsert fee record using admin client (bypasses RLS)
-        const { error: upsertError } = await supabaseAdmin
-          .from("fees")
-          .upsert(feeData, { 
-            onConflict: "student_id,month",
-            ignoreDuplicates: false 
-          });
 
-        if (upsertError) {
-          console.error(`Error upserting fee for student ${student.id}:`, upsertError);
-          throw new Error(upsertError.message);
+
+        // Prepare bill items and insert
+        const billItems = [];
+        billItems.push({ bill_id: billId, fee_name: 'Tuition Fee', amount: tuitionFee });
+        if (include_exam_fee) billItems.push({ bill_id: billId, fee_name: 'Exam Fee', amount: examFee });
+        if (include_annual_fee) billItems.push({ bill_id: billId, fee_name: 'Annual Fee', amount: annualFee });
+        if (include_computer_fee) billItems.push({ bill_id: billId, fee_name: 'Computer Fee', amount: computerFee });
+        if (transportFee > 0) billItems.push({ bill_id: billId, fee_name: 'Transport Fee', amount: transportFee });
+        if (previousDue > 0) billItems.push({ bill_id: billId, fee_name: 'Previous Due', amount: previousDue });
+
+        const { error: itemsError } = await supabase.from('fee_bill_items').insert(billItems);
+        if (itemsError) {
+          errorCount++;
+          errors.push(`Failed to create bill items for ${student.name}: ${itemsError.message}`);
+          return;
         }
+
+        // (advance ledger insertion already handled earlier); proceed to synthetic payment insertion if advanceUsed > 0
+        
+// Synthetic payment only if advance was actually used
+if (false && advanceUsed > 0) {
+
+  const paymentInsert = {
+    student_id: student.id,
+    bill_id: billId,
+    amount_paid: advanceUsed,
+    payment_mode: "advance_adjustment",
+    payment_date: new Date().toISOString().split("T")[0],
+  };
+
+  const { error: payErr } = await supabaseAdmin
+    .from("fee_payments")
+    .insert([paymentInsert]);
+
+  if (payErr) {
+    console.error(
+      `Failed to insert synthetic fee_payment for student ${student.id}:`,
+      payErr
+    );
+  }
+
+  // ✅ Update bill status after advance adjustment
+  const existingPaid = paymentsMap[billId] || 0;
+  const totalPaidNow = existingPaid + advanceUsed;
+
+  const newStatus =
+    totalPaidNow >= totalFee
+      ? "paid"
+      : totalPaidNow > 0
+      ? "partial"
+      : "unpaid";
+
+  await supabaseAdmin
+    .from("fee_bills")
+    .update({ bill_status: newStatus })
+    .eq("id", billId);
+
+  // ✅ Update local maps skipped — advances are NOT auto-applied during bill generation
+  paymentsMap[billId] = totalPaidNow;
+}
+
+
+            // advances map update skipped — no auto-advance application
 
         return { success: true, student_id: student.id };
       } catch (error) {
