@@ -6,7 +6,6 @@ import resultRoutes from "./routes/result.routes.js";
 import subjectRoutes from "./routes/subject.routes.js";
 import billRoutes from "./routes/bill.routes.js";
 import feeStructureRoutes from "./routes/feeStructure.routes.js";
-import billingRoutes from "./routes/billing.routes.js";
 import feesRoutes from "./routes/fees.routes.js";
 import invoiceRoutes from "./routes/invoice.routes.js";
 import megaRoutes from "./routes/mega.routes.js";
@@ -27,7 +26,6 @@ app.use("/api/bills", billRoutes);
 
 // Fee Management System Routes
 app.use("/api/fee-structure", feeStructureRoutes);
-app.use("/api/billing", billingRoutes);
 app.use("/api/fees", feesRoutes);
 app.use("/api/invoice", invoiceRoutes);
 

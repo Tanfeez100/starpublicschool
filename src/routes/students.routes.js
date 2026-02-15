@@ -89,26 +89,44 @@ router.get("/", adminOrTeacher, async (req, res) => {
       return res.status(500).json({ message: error.message });
     }
 
-    // 2️⃣ Attach previous_due
-    const studentsWithDue = await Promise.all(
-      students.map(async (s) => {
-        const { data: dues } = await supabase
-          .from("fees")
-          .select("due_amount")
-          .eq("student_id", s.id)
-          .in("status", ["DUE", "PARTIAL"]);
+    // 2️⃣ Attach previous_due - bulk (avoid N+1)
+    const studentIds = students.map(s => s.id);
 
-        const previous_due = dues?.reduce(
-          (sum, d) => sum + Number(d.due_amount || 0),
-          0
-        );
+    // Bulk fetch previous_dues for all students in a single query
+    const { data: allDuesRows } = await supabase
+      .from('previous_dues')
+      .select('student_id, remaining_due')
+      .in('student_id', studentIds)
+      .eq('status', 'pending')
+      .eq('cleared', false);
 
-        return {
-          ...s,
-          previous_due,
-        };
-      })
-    );
+    const previousDuesMap = {};
+    (allDuesRows || []).forEach(d => {
+      previousDuesMap[d.student_id] = (previousDuesMap[d.student_id] || 0) + (parseFloat(d.remaining_due || 0));
+    });
+
+    // For students without previous_dues rows, compute outstanding from fee_bills in bulk
+    const studentsWithoutDues = studentIds.filter(id => !previousDuesMap[id]);
+    let fallbackDuesMap = {};
+    if (studentsWithoutDues.length > 0) {
+      const { data: bills } = await supabase.from('fee_bills').select('id, student_id, total_amount').in('student_id', studentsWithoutDues);
+      if (bills && bills.length > 0) {
+        const billIds = bills.map(b => b.id);
+        const { data: payments } = await supabase.from('fee_payments').select('bill_id, amount_paid').in('bill_id', billIds || []);
+        const paidMap = {};
+        (payments || []).forEach(p => { paidMap[p.bill_id] = (paidMap[p.bill_id] || 0) + (parseFloat(p.amount_paid || 0)); });
+
+        bills.forEach(b => {
+          const outstanding = Math.max(0, parseFloat(b.total_amount || 0) - (paidMap[b.id] || 0));
+          fallbackDuesMap[b.student_id] = (fallbackDuesMap[b.student_id] || 0) + outstanding;
+        });
+      }
+    }
+
+    const studentsWithDue = students.map(s => ({
+      ...s,
+      previous_due: previousDuesMap[s.id] || fallbackDuesMap[s.id] || 0,
+    }));
 
     res.json(studentsWithDue);
   } catch (err) {

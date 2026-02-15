@@ -35,9 +35,7 @@ export const downloadInvoice = async (req, res) => {
       .single();
 
     if (billError || !bill) {
-      return res.status(404).json({
-        message: "Bill not found",
-      });
+      return res.status(404).json({ message: 'Bill not found' });
     }
 
     // Get bill items
@@ -69,7 +67,7 @@ export const downloadInvoice = async (req, res) => {
     }
 
     const totalPaid = payments?.reduce((sum, p) => sum + (p.amount_paid || 0), 0) || 0;
-    const remaining = bill.total_amount - totalPaid;
+    const remaining = Math.max(0, parseFloat(bill.total_amount || 0) - parseFloat(totalPaid || 0));
 
     // Prepare invoice data
     const invoiceData = {

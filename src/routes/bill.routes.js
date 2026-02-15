@@ -1,35 +1,29 @@
 import express from "express";
 import {
-  generateBillsPDFController,
+  getBillsDownloadData,
   generateBillsForClass,
-  generateBillsForAll,
+  
 } from "../controllers/bill.controller.js";
 import { adminOnly } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
 /**
- * GET /api/bills/pdf?month=YYYY-MM
- * Generate PDF with all bills for a given month (4 bills per page)
+ * GET /api/bills/download-data?month=YYYY-MM&class=LKG
+ * Returns structured bill data for PDF generation (Frontend handles PDF)
  * Admin Only
  */
-router.get("/pdf", adminOnly, generateBillsPDFController);
+router.get("/download-data", adminOnly, getBillsDownloadData);
 
 /**
  * POST /api/bills/generate
- * Generate bills for all students in a class for a given month
- * Body: { class: "Class Name", month: "YYYY-MM" }
- * Admin Only
+ * Generate bills for a specific class
  */
 router.post("/generate", adminOnly, generateBillsForClass);
 
 /**
  * POST /api/bills/generate-all
- * Generate bills for all students in all classes for a given month
- * Body: { month: "YYYY-MM" }
- * Admin Only
+ * Generate bills for all students
  */
-router.post("/generate-all", adminOnly, generateBillsForAll);
 
 export default router;
-

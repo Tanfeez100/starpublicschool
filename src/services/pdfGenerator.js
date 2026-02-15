@@ -7,28 +7,89 @@ import { supabase } from "./supabase.js";
  * @param {string} month - Month in YYYY-MM format
  * @returns {Promise<Buffer>} PDF buffer
  */
-export const generateBillsPDF = async (month) => {
+import { getDues, calculateAdvance } from "../utils/feeHelper.js";
+
+export const generateBillsPDF = async (month, className = null) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // Fetch all fees for the month with student details
-      const { data: fees, error } = await supabase
-        .from("fees")
-        .select(
-          `
-          *,
-          students (
-            name,
-            class,
-            roll_no,
-            father_name
-          )
-        `
-        )
-        .eq("month", month);
+      // If className provided, fetch students in class so we can restrict fees and report missing entries
+      let studentIdsForClass = null;
+      if (className) {
+        const { data: studentsInClass, error: studentsError } = await supabase
+          .from("students")
+          .select("id")
+          .eq("class", className);
+
+        if (studentsError) {
+          reject(new Error(`Failed to fetch students for class ${className}: ${studentsError.message}`));
+          return;
+        }
+
+        if (!studentsInClass || studentsInClass.length === 0) {
+          reject(new Error(`No students found for class ${className}`));
+          return;
+        }
+
+        studentIdsForClass = studentsInClass.map(s => s.id);
+      }
+
+      // Fetch fee_bills for the month with student details
+      let billsQuery = supabase
+        .from('fee_bills')
+        .select(`*, students ( name, class, roll_no, father_name )`)
+        .eq('month', month);
+
+      if (studentIdsForClass) {
+        billsQuery = billsQuery.in('student_id', studentIdsForClass);
+      }
+
+      const { data: bills, error: billsErr } = await billsQuery;
+      if (billsErr) return reject(new Error(`Failed to fetch fee_bills: ${billsErr.message}`));
+
+      if (!bills || bills.length === 0) return reject(new Error('No fee_bills found for the specified month'));
+
+      // Prefetch bill items and payments for efficiency
+      const billIds = bills.map(b => b.id);
+      const { data: itemsRows } = await supabase.from('fee_bill_items').select('bill_id, fee_name, amount').in('bill_id', billIds || []);
+      const { data: paymentsRows } = await supabase.from('fee_payments').select('bill_id, amount_paid, payment_mode').in('bill_id', billIds || []);
+
+      const itemsMap = {};
+      (itemsRows || []).forEach(it => { itemsMap[it.bill_id] = itemsMap[it.bill_id] || []; itemsMap[it.bill_id].push(it); });
+      const paymentsMap = {};
+      (paymentsRows || []).forEach(p => { paymentsMap[p.bill_id] = (paymentsMap[p.bill_id] || 0) + (parseFloat(p.amount_paid || 0)); });
+
+      // Enrich bills with dues, advance and computed breakdown (map fee_name → typed fields)
+      const enrichedFees = await Promise.all(bills.map(async (bill) => {
+        const dues = await getDues(bill.student_id).catch(() => 0);
+        const advance = await calculateAdvance(bill.student_id).catch(() => 0);
+
+        const items = itemsMap[bill.id] || [];
+        let tuition_fee = 0, exam_fee = 0, annual_fee = 0, computer_fee = 0, transport_fee = 0, previous_due = 0;
+        items.forEach(it => {
+          const n = (it.fee_name || '').toLowerCase();
+          if (n.includes('tuition')) tuition_fee += parseFloat(it.amount || 0);
+          else if (n.includes('exam')) exam_fee += parseFloat(it.amount || 0);
+          else if (n.includes('annual')) annual_fee += parseFloat(it.amount || 0);
+          else if (n.includes('computer')) computer_fee += parseFloat(it.amount || 0);
+          else if (n.includes('transport')) transport_fee += parseFloat(it.amount || 0);
+          else if (n.includes('previous')) previous_due += parseFloat(it.amount || 0);
+        });
+
+        const paidFromPayments = paymentsMap[bill.id] || 0;
+        const outstandingFromFees = Math.max(0, parseFloat(bill.total_amount || 0) - paidFromPayments);
+        const outstandingFromDues = Math.max(0, parseFloat(dues || 0));
+        const additionalDues = Math.max(0, outstandingFromDues - outstandingFromFees);
+        // Prefer stored `fee_bills.net_payable` when present; otherwise compute and subtract active advance
+        const net_payable = (bill.net_payable !== undefined && bill.net_payable !== null)
+          ? parseFloat(bill.net_payable || 0)
+          : Math.max(0, outstandingFromFees + additionalDues - (advance || 0));
+
+        return { ...bill, dues, advance, net_payable, tuition_fee, exam_fee, annual_fee, computer_fee, transport_fee, previous_due };
+      }));
 
       // Sort fees by class and roll number
-      if (fees && fees.length > 0) {
-        fees.sort((a, b) => {
+      if (enrichedFees && enrichedFees.length > 0) {
+        enrichedFees.sort((a, b) => {
           const classA = a.students?.class || "";
           const classB = b.students?.class || "";
           if (classA !== classB) {
@@ -40,21 +101,13 @@ export const generateBillsPDF = async (month) => {
         });
       }
 
-      if (error) {
-        reject(new Error(`Failed to fetch fees: ${error.message}`));
-        return;
-      }
-
-      if (!fees || fees.length === 0) {
-        reject(new Error("No fees found for the specified month"));
-        return;
-      }
-
       // Create PDF document
       const doc = new PDFDocument({
         size: "A4",
         margin: 20,
       });
+
+    
 
       const buffers = [];
       doc.on("data", buffers.push.bind(buffers));
@@ -136,6 +189,14 @@ const drawBill = (doc, fee, x, y, width, height) => {
       width: width - 2 * padding,
       align: "center",
     });
+  // Class label in header (right-aligned)
+  doc
+    .fontSize(9)
+    .font("Helvetica")
+    .text(`Class: ${student?.class || "N/A"}`, x + padding, currentY, {
+      width: width - 2 * padding,
+      align: "right",
+    });
   currentY += lineHeight + 10;
 
   // Separator line
@@ -195,10 +256,44 @@ const drawBill = (doc, fee, x, y, width, height) => {
     currentY += lineHeight - 2;
   }
 
+  if (fee.computer_fee) {
+    doc.font("Helvetica").text("Computer Fee:", x + padding, currentY);
+    doc.text(`Rs. ${fee.computer_fee.toFixed(2)}`, x + width - padding - 60, currentY, {
+      align: "right",
+    });
+    currentY += lineHeight - 2;
+  }
+
+  // Transport fee
+  if (fee.transport_fee && parseFloat(fee.transport_fee) > 0) {
+    doc.font("Helvetica").text("Transport Fee:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(fee.transport_fee).toFixed(2)}`, x + width - padding - 60, currentY, {
+      align: "right",
+    });
+    currentY += lineHeight - 2;
+  }
+
   // Previous due
   if (fee.previous_due && fee.previous_due > 0) {
     doc.font("Helvetica").text("Previous Due:", x + padding, currentY);
     doc.text(`Rs. ${fee.previous_due.toFixed(2)}`, x + width - padding - 60, currentY, {
+      align: "right",
+    });
+    currentY += lineHeight - 2;
+  }
+
+  // Dues and net payable (enriched)
+  if (fee.dues !== undefined) {
+    doc.font("Helvetica").text("Dues:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(fee.dues).toFixed(2)}`, x + width - padding - 60, currentY, {
+      align: "right",
+    });
+    currentY += lineHeight - 2;
+  }
+
+  if (fee.net_payable !== undefined) {
+    doc.font("Helvetica-Bold").text("Net Payable:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(fee.net_payable).toFixed(2)}`, x + width - padding - 60, currentY, {
       align: "right",
     });
     currentY += lineHeight - 2;
@@ -235,9 +330,29 @@ const drawBill = (doc, fee, x, y, width, height) => {
   });
   currentY += lineHeight + 5;
 
+  // Dues/Advance/Net Payable
+  if (fee.dues !== undefined) {
+    doc.fontSize(9).font("Helvetica");
+    doc.text("Dues:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(fee.dues).toFixed(2)}`, x + width - padding - 60, currentY, { align: "right" });
+    currentY += lineHeight + 2;
+  }
+  if (fee.advance !== undefined) {
+    doc.fontSize(9).font("Helvetica");
+    doc.text("Advance:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(fee.advance).toFixed(2)}`, x + width - padding - 60, currentY, { align: "right" });
+    currentY += lineHeight + 2;
+  }
+  if (fee.net_payable !== undefined) {
+    doc.fontSize(10).font("Helvetica-Bold");
+    doc.text("Net Payable:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(fee.net_payable).toFixed(2)}`, x + width - padding - 60, currentY, { align: "right" });
+    currentY += lineHeight + 5;
+  }
+
   // Status
   doc.fontSize(9);
-  const statusColor = fee.status === "PAID" ? "green" : fee.status === "PARTIAL" ? "orange" : "red";
+  const statusColor = (fee.status || "").toString().toUpperCase() === "PAID" ? "green" : (fee.status || "").toString().toUpperCase() === "PARTIAL" ? "orange" : "red";
   doc.fillColor(statusColor);
   doc.font("Helvetica-Bold").text(`Status: ${fee.status}`, x + padding, currentY);
   doc.fillColor("black");
@@ -271,6 +386,27 @@ const formatMonth = (month) => {
     "December",
   ];
   return `${monthNames[parseInt(monthNum) - 1]} ${year}`;
+};
+
+// Return only month name (no year)
+const formatMonthName = (month) => {
+  if (!month) return "N/A";
+  const [, monthNum] = month.split("-");
+  const monthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  return `${monthNames[parseInt(monthNum) - 1]}`;
 };
 
 /**
@@ -329,7 +465,7 @@ export const generateInvoicePDF = async (invoiceData) => {
           align: "right",
           width: contentWidth,
         })
-        .text(`Month: ${formatMonth(invoiceData.month)}`, margin, 110, {
+        .text(`Month: ${formatMonthName(invoiceData.month)}`, margin, 110, {
           align: "right",
           width: contentWidth,
         });
@@ -437,7 +573,7 @@ export const generateInvoicePDF = async (invoiceData) => {
         invoiceData.payments.forEach((payment) => {
           doc
             .text(
-              `${formatDate(payment.payment_date)} - ${payment.payment_mode.toUpperCase()} - Rs. ${parseFloat(payment.amount_paid).toFixed(2)}`,
+              `${formatDate(payment.payment_date)} - ${(payment.payment_mode || "recorded").toUpperCase()} - Rs. ${parseFloat(payment.amount_paid).toFixed(2)}`,
               margin + 10,
               currentY
             );
@@ -463,8 +599,11 @@ export const generateInvoicePDF = async (invoiceData) => {
         .text(`Total Paid: Rs. ${parseFloat(invoiceData.total_paid || 0).toFixed(2)}`, margin, currentY)
         .text(`Remaining: Rs. ${parseFloat(invoiceData.remaining || 0).toFixed(2)}`, margin, currentY + 20);
 
+      // Net Payable intentionally not shown on invoice per config
+
       // Status Badge
-      const status = invoiceData.status || "unpaid";
+      // Normalize status to lowercase so checks are case-insensitive
+      const status = (invoiceData.status || "unpaid").toString().toLowerCase();
       const statusColor =
         status === "paid" ? "#27ae60" : status === "partial" ? "#f39c12" : "#e74c3c";
       doc
@@ -638,7 +777,8 @@ export const generateBillsPDFForBilling = async (className, month, section = nul
         }
 
         // Draw 4 bills on the page
-        batch.forEach((bill, index) => {
+        for (let index = 0; index < batch.length; index++) {
+          const bill = batch[index];
           const row = Math.floor(index / 2);
           const col = index % 2;
 
@@ -649,8 +789,17 @@ export const generateBillsPDFForBilling = async (className, month, section = nul
           const billPayments = paymentsByBill[bill.id] || [];
           const totalPaid = billPayments.reduce((sum, p) => sum + (p.amount_paid || 0), 0);
 
-          drawBillForBilling(doc, bill, billItems, totalPaid, x, y, billWidth, billHeight);
-        });
+          // Enrich bill with dues/advance/net_payable similar to fees path
+          const dues = await getDues(bill.student_id).catch(() => 0);
+          const advance = await calculateAdvance(bill.student_id).catch(() => 0);
+          const outstandingFromFees = Math.max(0, parseFloat(bill.total_amount || 0) - parseFloat(totalPaid || 0));
+          const outstandingFromDues = Math.max(0, parseFloat(dues || 0));
+          const additionalDues = Math.max(0, outstandingFromDues - outstandingFromFees);
+          // Do not subtract advance automatically here — advance shown separately in billing PDF
+          const net_payable = Math.max(0, outstandingFromFees + additionalDues);
+
+          drawBillForBilling(doc, { ...bill, dues, advance, net_payable }, billItems, totalPaid, x, y, billWidth, billHeight);
+        }
       }
 
       doc.end();
@@ -686,6 +835,14 @@ const drawBillForBilling = (doc, bill, items, totalPaid, x, y, width, height) =>
     .text("School Management System", x + padding, currentY, {
       width: width - 2 * padding,
       align: "center",
+    });
+  // Class label in header (right-aligned)
+  doc
+    .fontSize(9)
+    .font("Helvetica")
+    .text(`Class: ${student?.class || "N/A"}`, x + padding, currentY, {
+      width: width - 2 * padding,
+      align: "right",
     });
   currentY += lineHeight + 10;
 
@@ -754,7 +911,7 @@ const drawBillForBilling = (doc, bill, items, totalPaid, x, y, width, height) =>
   currentY += lineHeight + 2;
 
   // Remaining amount
-  const remaining = bill.total_amount - totalPaid;
+  const remaining = Math.max(0, parseFloat(bill.total_amount || 0) - parseFloat(totalPaid || 0));
   doc.fontSize(10).font("Helvetica-Bold");
   doc.text("Remaining:", x + padding, currentY);
   doc.text(`Rs. ${remaining.toFixed(2)}`, x + width - padding - 50, currentY, {
@@ -762,9 +919,29 @@ const drawBillForBilling = (doc, bill, items, totalPaid, x, y, width, height) =>
   });
   currentY += lineHeight + 5;
 
+  // Dues / Advance / Net Payable (if available)
+  if (bill.dues !== undefined) {
+    doc.fontSize(9).font("Helvetica");
+    doc.text("Dues:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(bill.dues).toFixed(2)}`, x + width - padding - 50, currentY, { align: "right" });
+    currentY += lineHeight + 2;
+  }
+  if (bill.advance !== undefined) {
+    doc.fontSize(9).font("Helvetica");
+    doc.text("Advance:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(bill.advance).toFixed(2)}`, x + width - padding - 50, currentY, { align: "right" });
+    currentY += lineHeight + 2;
+  }
+  if (bill.net_payable !== undefined) {
+    doc.fontSize(10).font("Helvetica-Bold");
+    doc.text("Net Payable:", x + padding, currentY);
+    doc.text(`Rs. ${parseFloat(bill.net_payable).toFixed(2)}`, x + width - padding - 50, currentY, { align: "right" });
+    currentY += lineHeight + 5;
+  }
+
   // Status
   doc.fontSize(9);
-  const status = bill.bill_status || "unpaid";
+  const status = (bill.bill_status || bill.status || "unpaid").toString().toLowerCase();
   const statusColor = status === "paid" ? "green" : status === "partial" ? "orange" : "red";
   doc.fillColor(statusColor);
   doc.font("Helvetica-Bold").text(`Status: ${status.toUpperCase()}`, x + padding, currentY);

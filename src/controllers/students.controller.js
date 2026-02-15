@@ -72,14 +72,7 @@ export const addStudent = async (req, res) => {
     const studentResult = await client.query(studentQuery, studentValues);
     const studentId = studentResult.rows[0].id;
 
-    /* 2️⃣ INSERT TRANSPORT FEE (ONLY IF YES) */
-    if (uses_transport && transport_charge) {
-      const feeQuery = `
-        INSERT INTO fees (student_id, transport_fee)
-        VALUES ($1, $2)
-      `;
-      await client.query(feeQuery, [studentId, transport_charge]);
-    }
+    /* 2️⃣ No legacy `fees` insert here — transport is handled during bill generation */
 
     await client.query("COMMIT");
 
