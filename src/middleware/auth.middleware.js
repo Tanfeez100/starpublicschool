@@ -1,8 +1,27 @@
-import { supabase } from "../services/supabase.js";
+import { supabase, verifyToken, getRoleCached } from "../services/supabase.js";
 
 /**
- * Authentication Middleware
+ * Retry wrapper for auth operations
+ */
+const retryAuth = async (fn, maxRetries = 2) => {
+  let lastError;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
+};
+
+/**
+ * Authentication Middleware - OPTIMIZED
  * Verifies JWT token with Supabase
+ * Caches user roles to reduce database queries
  */
 export const authenticate = async (req, res, next) => {
   try {
@@ -17,10 +36,10 @@ export const authenticate = async (req, res, next) => {
 
     const token = authHeader.split(" ")[1];
 
-    // Verify token with Supabase
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-
-    if (error || !user) {
+    // ⚡ OPTIMIZATION: Verify token with retry logic
+    const tokenVerification = await retryAuth(() => verifyToken(token));
+    
+    if (!tokenVerification.valid) {
       return res.status(401).json({ 
         message: "Invalid or expired token. Please login again.",
         error: "AUTHENTICATION_REQUIRED",
@@ -28,14 +47,12 @@ export const authenticate = async (req, res, next) => {
       });
     }
 
-    // Get user role from user_roles table
-    const { data: roleData, error: roleError } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .single();
+    const user = tokenVerification.user;
 
-    if (roleError || !roleData) {
+    // ⚡ OPTIMIZATION: Get role from cache if available
+    const role = await getRoleCached(user.id);
+
+    if (!role) {
       return res.status(403).json({ 
         message: "Role not assigned. Contact administrator." 
       });
@@ -45,7 +62,7 @@ export const authenticate = async (req, res, next) => {
     req.user = {
       id: user.id,
       email: user.email,
-      role: roleData.role, // "admin" or "teacher"
+      role: role, // "admin" or "teacher"
     };
 
     next();
