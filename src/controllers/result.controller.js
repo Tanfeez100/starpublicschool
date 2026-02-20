@@ -1,4 +1,14 @@
-import { supabase } from "../services/supabase.js";
+﻿import { supabase } from "../services/supabase.js";
+
+const ALLOWED_RESULT_TERMINALS = new Set(["first", "second", "third", "annual"]);
+
+const isDrawingSubject = (subject) => {
+  const name = String(subject?.name || "").toLowerCase();
+  const code = String(subject?.code || "").toLowerCase();
+  return name.includes("drawing") || code.includes("drawing") || code === "drw";
+};
+
+const getSubjectMaxMarks = (subject) => (isDrawingSubject(subject) ? 50 : 100);
 
 /**
  * Get result for a student (specific terminal)
@@ -8,42 +18,46 @@ import { supabase } from "../services/supabase.js";
 export const getResult = async (req, res) => {
   try {
     const { class: cls, roll, terminal, section } = req.query;
+    const requestedTerminal = String(terminal || "").trim();
+    const terminalLower = requestedTerminal.toLowerCase();
 
-    // 🔒 STRICT VALIDATION
-    if (!cls || !roll || !terminal) {
+    if (!cls || !roll || !requestedTerminal) {
       return res.status(400).json({
         message: "Class, Roll and Terminal are required",
       });
     }
 
-    // 1️⃣ Fetch student (with optional section filter)
+    if (!ALLOWED_RESULT_TERMINALS.has(terminalLower)) {
+      return res.status(404).json({
+        message: "Result not found",
+      });
+    }
+
+    // Fetch student (with optional section filter)
     let studentQuery = supabase
       .from("students")
       .select("*")
       .eq("class", cls)
       .eq("roll_no", Number(roll));
-    
-    // Add section filter if provided
+
     if (section) {
       studentQuery = studentQuery.eq("section", section);
     }
-    
+
     const { data: student, error: studentError } = await studentQuery.single();
 
     if (studentError || !student) {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    // 2️⃣ Get class subjects
+    // Get class subjects
     const { data: classSubjects, error: csError } = await supabase
       .from("class_subjects")
       .select(`
         subjects (
           id,
           code,
-          name,
-          max_external_marks,
-          max_internal_marks
+          name
         )
       `)
       .eq("class", cls)
@@ -53,20 +67,45 @@ export const getResult = async (req, res) => {
       return res.status(404).json({ message: "No subjects found for class" });
     }
 
-    // 3️⃣ Get marks for student (all subjects + terminal)
     const subjectIds = classSubjects.map((cs) => cs.subjects.id);
-    const { data: marksData, error: marksError } = await supabase
+
+    // Get marks for requested terminal
+    let { data: marksData, error: marksError } = await supabase
       .from("marks")
       .select("*")
       .eq("student_id", student.id)
-      .eq("terminal", terminal)
+      .eq("terminal", requestedTerminal)
       .in("subject_id", subjectIds);
 
     if (marksError) {
       return res.status(500).json({ message: marksError.message });
     }
 
-    // 4️⃣ Build response with marks
+    // If annual marks are missing, fallback to latest term marks.
+    let resolvedTerminal = requestedTerminal;
+    if (terminalLower === "annual" && (!marksData || marksData.length === 0)) {
+      const fallbackTerminals = ["Third", "Second", "First"];
+      for (const fb of fallbackTerminals) {
+        const { data: fallbackMarks, error: fallbackErr } = await supabase
+          .from("marks")
+          .select("*")
+          .eq("student_id", student.id)
+          .eq("terminal", fb)
+          .in("subject_id", subjectIds);
+
+        if (fallbackErr) {
+          return res.status(500).json({ message: fallbackErr.message });
+        }
+
+        if (fallbackMarks && fallbackMarks.length > 0) {
+          marksData = fallbackMarks;
+          resolvedTerminal = fb;
+          break;
+        }
+      }
+    }
+
+    // Build marks map
     const marksMap = {};
     marksData?.forEach((m) => {
       marksMap[m.subject_id] = {
@@ -76,14 +115,14 @@ export const getResult = async (req, res) => {
       };
     });
 
-    // 5️⃣ Calculate summary
+    // Calculate summary
     let totalMaxMarks = 0;
     let totalObtained = 0;
     const marksDetails = [];
 
     classSubjects.forEach((cs) => {
       const subject = cs.subjects;
-      const maxMarks = (subject.max_external_marks || 0) + (subject.max_internal_marks || 0);
+      const maxMarks = getSubjectMaxMarks(subject);
       const obtained = marksMap[subject.id] || {
         external: null,
         internal: null,
@@ -97,13 +136,22 @@ export const getResult = async (req, res) => {
         subject: subject.name,
         code: subject.code,
         max_marks: maxMarks,
-        external_marks: obtained.external !== null && obtained.external !== undefined ? obtained.external : "AB",
-        internal_marks: obtained.internal !== null && obtained.internal !== undefined ? obtained.internal : "AB",
+        external_marks:
+          obtained.external !== null && obtained.external !== undefined
+            ? obtained.external
+            : "AB",
+        internal_marks:
+          obtained.internal !== null && obtained.internal !== undefined
+            ? obtained.internal
+            : "AB",
         total_obtained: obtained.total > 0 ? obtained.total : "AB",
       });
     });
 
-    const percentage = totalMaxMarks > 0 ? ((totalObtained / totalMaxMarks) * 100).toFixed(2) : "0.00";
+    const percentage =
+      totalMaxMarks > 0
+        ? ((totalObtained / totalMaxMarks) * 100).toFixed(2)
+        : "0.00";
     const division =
       parseFloat(percentage) >= 60
         ? "First"
@@ -113,20 +161,18 @@ export const getResult = async (req, res) => {
         ? "Third"
         : "Fail";
 
-    // 6️⃣ Check if result is published
+    // Check if result is published
     const { data: publishedSummary } = await supabase
       .from("result_summary")
       .select("status")
       .eq("student_id", student.id)
-      .eq("terminal", terminal)
+      .eq("terminal", resolvedTerminal)
       .maybeSingle();
 
-    const status = publishedSummary?.status || (totalObtained > 0 ? "Pending" : "Pending");
-    
-    // Ensure total_obtained is a number
-    const totalObtainedRounded = totalObtained > 0 ? Math.round(totalObtained * 100) / 100 : 0;
+    const status = publishedSummary?.status || "Pending";
+    const totalObtainedRounded =
+      totalObtained > 0 ? Math.round(totalObtained * 100) / 100 : 0;
 
-    // 7️⃣ Response
     return res.json({
       student: {
         id: student.id,
@@ -136,7 +182,9 @@ export const getResult = async (req, res) => {
         roll_no: student.roll_no,
         section: student.section,
       },
-      terminal,
+      terminal: requestedTerminal,
+      resolved_terminal:
+        resolvedTerminal !== requestedTerminal ? resolvedTerminal : undefined,
       marks: marksDetails,
       summary: {
         total_max_marks: totalMaxMarks,

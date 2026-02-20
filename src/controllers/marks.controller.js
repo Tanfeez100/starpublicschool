@@ -1,5 +1,179 @@
 import { supabase } from "../services/supabase.js";
 
+const PROMOTION_TERMINALS = new Set(["annual"]);
+const ALLOWED_RESULT_TERMINALS = new Set(["first", "second", "third", "annual"]);
+const PASSED_OUT_CLASS = "Passed Out";
+const PASSED_OUT_STATUS = "Passed Out";
+
+const normalizeClassForPromotion = (className) => {
+  const value = String(className || "").trim().toUpperCase();
+  const compact = value.replace(/[\s.]/g, "");
+
+  if (compact === "MOTHERCARE") return "MOTHER CARE";
+  if (compact === "LKG") return "LKG";
+  if (compact === "UKG") return "UKG";
+  if (/^[1-8]$/.test(compact)) return compact;
+
+  return value;
+};
+
+const getPromotionTarget = (className) => {
+  const normalizedClass = normalizeClassForPromotion(className);
+
+  if (normalizedClass === "MOTHER CARE") return { nextClass: "LKG", passedOut: false };
+  if (normalizedClass === "LKG") return { nextClass: "UKG", passedOut: false };
+  if (normalizedClass === "UKG") return { nextClass: "1", passedOut: false };
+  if (normalizedClass === "1") return { nextClass: "2", passedOut: false };
+  if (normalizedClass === "2") return { nextClass: "3", passedOut: false };
+  if (normalizedClass === "3") return { nextClass: "4", passedOut: false };
+  if (normalizedClass === "4") return { nextClass: "5", passedOut: false };
+  if (normalizedClass === "5") return { nextClass: "6", passedOut: false };
+  if (normalizedClass === "6") return { nextClass: "7", passedOut: false };
+  if (normalizedClass === "7") return { nextClass: "8", passedOut: false };
+  if (normalizedClass === "8") return { nextClass: PASSED_OUT_CLASS, passedOut: true };
+
+  return null;
+};
+
+const shouldAutoPromote = (terminal) =>
+  PROMOTION_TERMINALS.has(String(terminal || "").trim().toLowerCase());
+
+const isMissingColumnError = (error, columnName) => {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    message.includes("column") &&
+    message.includes(String(columnName || "").toLowerCase()) &&
+    (message.includes("does not exist") || message.includes("schema cache"))
+  );
+};
+
+/**
+ * Resolve class subjects with section-first strategy.
+ * - If section-specific mappings exist, use them.
+ * - Otherwise fallback to class-level mappings.
+ */
+const fetchClassSubjectsWithFallback = async (className, section) => {
+  let classSubjects = null;
+  let csError = null;
+
+  if (section) {
+    const { data: sectionData, error: sectionError } = await supabase
+      .from("class_subjects")
+      .select(`
+        subject_id,
+        section,
+        sequence,
+        subjects (
+          id,
+          name,
+          code
+        )
+      `)
+      .eq("class", className)
+      .eq("section", section)
+      .order("sequence", { ascending: true });
+
+    if (!sectionError && sectionData && sectionData.length > 0) {
+      classSubjects = sectionData;
+    }
+  }
+
+  if (!classSubjects) {
+    const { data: allData, error: allError } = await supabase
+      .from("class_subjects")
+      .select(`
+        subject_id,
+        section,
+        sequence,
+        subjects (
+          id,
+          name,
+          code
+        )
+      `)
+      .eq("class", className)
+      .order("sequence", { ascending: true });
+
+    classSubjects = allData;
+    csError = allError;
+  }
+
+  return { classSubjects, csError };
+};
+
+const isProvided = (value) =>
+  value !== undefined && value !== null && String(value).trim() !== "";
+
+const parseMark = (value, fieldLabel) => {
+  if (!isProvided(value)) return { hasValue: false, value: null };
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return { error: `${fieldLabel} must be a valid number` };
+  }
+  return { hasValue: true, value: parsed };
+};
+
+const isDrawingSubject = (subject) => {
+  const name = String(subject?.name || "").toLowerCase();
+  const code = String(subject?.code || "").toLowerCase();
+  return name.includes("drawing") || code.includes("drawing") || code === "drw";
+};
+
+const validateAndNormalizeSubjectMarks = ({
+  subject,
+  external_marks,
+  internal_marks,
+}) => {
+  const subjectLabel = `${subject?.name || "Unknown"}${subject?.code ? ` (${subject.code})` : ""}`;
+  const external = parseMark(external_marks, `External marks for ${subjectLabel}`);
+  const internal = parseMark(internal_marks, `Internal marks for ${subjectLabel}`);
+
+  if (external.error) return { error: external.error };
+  if (internal.error) return { error: internal.error };
+
+  if (external.hasValue && external.value < 0) {
+    return { error: `External marks for ${subjectLabel} cannot be negative` };
+  }
+
+  if (internal.hasValue && internal.value < 0) {
+    return { error: `Internal marks for ${subjectLabel} cannot be negative` };
+  }
+
+  if (isDrawingSubject(subject)) {
+    if (internal.hasValue) {
+      return { error: `Internal marks are not allowed for Drawing (${subjectLabel}). Only external marks are allowed` };
+    }
+    if (external.hasValue && external.value > 50) {
+      return { error: `External marks for Drawing (${subjectLabel}) cannot exceed 50` };
+    }
+  } else {
+    if (external.hasValue && external.value > 80) {
+      return { error: `External marks for ${subjectLabel} cannot exceed 80` };
+    }
+    if (internal.hasValue && internal.value > 20) {
+      return { error: `Internal marks for ${subjectLabel} cannot exceed 20` };
+    }
+  }
+
+  return {
+    external_marks: external.hasValue ? external.value : null,
+    internal_marks: internal.hasValue ? internal.value : null,
+  };
+};
+
+const getSubjectMaxMarks = (subject) => {
+  const externalMax = Number(subject?.max_external_marks);
+  const internalMax = Number(subject?.max_internal_marks);
+  const hasExternalMax = Number.isFinite(externalMax) && externalMax >= 0;
+  const hasInternalMax = Number.isFinite(internalMax) && internalMax >= 0;
+
+  if (hasExternalMax || hasInternalMax) {
+    return (hasExternalMax ? externalMax : 0) + (hasInternalMax ? internalMax : 0);
+  }
+
+  return isDrawingSubject(subject) ? 50 : 100;
+};
+
 /**
  * Helper: Get result summary for a single terminal
  */
@@ -30,7 +204,6 @@ const getTerminalResult = async (student, cls, section, terminal, classSubjects)
     });
 
     // Calculate summary
-    const DEFAULT_MAX_MARKS = 100;
     let totalMaxMarks = 0;
     let totalObtained = 0;
     const marksDetails = [];
@@ -39,7 +212,7 @@ const getTerminalResult = async (student, cls, section, terminal, classSubjects)
       const subject = cs.subjects;
       if (!subject || !subject.id) return;
       
-      const maxMarks = DEFAULT_MAX_MARKS;
+      const maxMarks = getSubjectMaxMarks(subject);
       const subjectId = cs.subject_id || subject.id;
       const obtained = marksMap[subjectId] || {
         external: null,
@@ -267,9 +440,7 @@ export const getClassSubjects = async (req, res) => {
         subjects (
           id,
           name,
-          code,
-          max_external_marks,
-          max_internal_marks
+          code
         )
       `)
       .eq("class", cls)
@@ -304,9 +475,13 @@ export const getResultByClassRoll = async (req, res) => {
       });
     }
 
-    // If terminal is "All", fetch all three terminals
-    if (terminal.toLowerCase() === "all") {
-      return getAnnualResult(req, res, cls, roll, section);
+    const requestedTerminal = String(terminal || "").trim();
+    const terminalLower = requestedTerminal.toLowerCase();
+
+    if (!ALLOWED_RESULT_TERMINALS.has(terminalLower)) {
+      return res.status(404).json({
+        message: "Result not found",
+      });
     }
 
     // Rest of the code remains the same for single terminal
@@ -399,15 +574,39 @@ export const getResultByClassRoll = async (req, res) => {
 
     // 3️⃣ Get marks for student (all subjects + terminal)
     const subjectIds = classSubjects.map((cs) => cs.subject_id || cs.subjects?.id).filter(Boolean);
-    const { data: marksData, error: marksError } = await supabase
+    let { data: marksData, error: marksError } = await supabase
       .from("marks")
       .select("*")
       .eq("student_id", student.id)
-      .eq("terminal", terminal)
+      .eq("terminal", requestedTerminal)
       .in("subject_id", subjectIds);
 
     if (marksError) {
       return res.status(500).json({ message: marksError.message });
+    }
+
+    // If annual marks are not present, fallback to latest available terminal marks.
+    let resolvedTerminal = requestedTerminal;
+    if (terminalLower === "annual" && (!marksData || marksData.length === 0)) {
+      const fallbackTerminals = ["Third", "Second", "First"];
+      for (const fb of fallbackTerminals) {
+        const { data: fallbackMarks, error: fallbackErr } = await supabase
+          .from("marks")
+          .select("*")
+          .eq("student_id", student.id)
+          .eq("terminal", fb)
+          .in("subject_id", subjectIds);
+
+        if (fallbackErr) {
+          return res.status(500).json({ message: fallbackErr.message });
+        }
+
+        if (fallbackMarks && fallbackMarks.length > 0) {
+          marksData = fallbackMarks;
+          resolvedTerminal = fb;
+          break;
+        }
+      }
     }
 
     // 4️⃣ Build response with marks
@@ -421,9 +620,6 @@ export const getResultByClassRoll = async (req, res) => {
     });
 
     // 5️⃣ Calculate summary
-    // Use default max marks (100 per subject: 80 external + 20 internal)
-    // Drawing subject typically has 50, but for now using 100 for all
-    const DEFAULT_MAX_MARKS = 100;
     let totalMaxMarks = 0;
     let totalObtained = 0;
     const marksDetails = [];
@@ -432,7 +628,7 @@ export const getResultByClassRoll = async (req, res) => {
       const subject = cs.subjects;
       if (!subject || !subject.id) return; // Skip if subject data is missing
       
-      const maxMarks = DEFAULT_MAX_MARKS; // Use default max marks
+      const maxMarks = getSubjectMaxMarks(subject);
       const subjectId = cs.subject_id || subject.id;
       const obtained = marksMap[subjectId] || {
         external: null,
@@ -468,7 +664,7 @@ export const getResultByClassRoll = async (req, res) => {
       .from("result_summary")
       .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
       .eq("student_id", student.id)
-      .eq("terminal", terminal)
+      .eq("terminal", resolvedTerminal)
       .maybeSingle();
 
     // Use published summary data if available, otherwise use calculated values
@@ -509,6 +705,7 @@ export const getResultByClassRoll = async (req, res) => {
         section: student.section,
       },
       terminal,
+      resolved_terminal: resolvedTerminal !== requestedTerminal ? resolvedTerminal : undefined,
       marks: marksDetails,
       summary: {
         total_max_marks: finalTotalMaxMarks,
@@ -536,24 +733,20 @@ export const submitMarks = async (req, res) => {
     const { class: className, section, terminal, roll_no, marks } = req.body;
 
     // Validation
-    if (!className || !terminal || !roll_no || !marks || !Array.isArray(marks)) {
+    if (!className || !section || !terminal || !roll_no || !marks || !Array.isArray(marks)) {
       return res.status(400).json({
-        message: "class, terminal, roll_no, and marks (array) are required",
+        message: "class, section, terminal, roll_no, and marks (array) are required",
       });
     }
 
     // Find student by class, section, and roll_no
-    let studentQuery = supabase
+    const { data: student, error: studentError } = await supabase
       .from("students")
       .select("id, name, class, section, roll_no")
       .eq("class", className)
-      .eq("roll_no", Number(roll_no));
-
-    if (section) {
-      studentQuery = studentQuery.eq("section", section);
-    }
-
-    const { data: student, error: studentError } = await studentQuery.single();
+      .eq("section", section)
+      .eq("roll_no", Number(roll_no))
+      .single();
 
     if (studentError || !student) {
       return res.status(404).json({ 
@@ -561,31 +754,16 @@ export const submitMarks = async (req, res) => {
       });
     }
 
-    // Get class subjects to validate subject names/codes
-    // Filter by section if provided (subjects are section-specific)
-    let classSubjectsQuery = supabase
-      .from("class_subjects")
-      .select(`
-        subject_id,
-        section,
-        subjects (
-          id,
-          name,
-          code
-        )
-      `)
-      .eq("class", className);
-
-    // If section is provided, filter by section
-    if (section) {
-      classSubjectsQuery = classSubjectsQuery.eq("section", section);
-    }
-
-    const { data: classSubjects, error: csError } = await classSubjectsQuery;
+    // Get class subjects (prefer class+section, fallback to class-level)
+    const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
+      className,
+      section
+    );
 
     if (csError || !classSubjects?.length) {
       return res.status(404).json({ 
-        message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}` 
+        message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}`,
+        note: "Add subjects to class using POST /api/subjects/add",
       });
     }
 
@@ -593,8 +771,14 @@ export const submitMarks = async (req, res) => {
     const subjectMap = {};
     classSubjects.forEach((cs) => {
       const subject = cs.subjects;
-      subjectMap[subject.name.toLowerCase()] = subject.id;
-      subjectMap[subject.code.toLowerCase()] = subject.id;
+      if (!subject?.id) return;
+      const subjectDetails = {
+        id: subject.id,
+        name: subject.name,
+        code: subject.code,
+      };
+      subjectMap[String(subject.name || "").toLowerCase()] = subjectDetails;
+      subjectMap[String(subject.code || "").toLowerCase()] = subjectDetails;
     });
 
     // Check existing marks for this student and terminal
@@ -626,18 +810,19 @@ export const submitMarks = async (req, res) => {
       }
 
       // Try to find subject by name first, then by code
-      let subject_id = null;
+      let subjectRef = null;
       if (subject_name) {
-        subject_id = subjectMap[subject_name.toLowerCase()];
+        subjectRef = subjectMap[subject_name.toLowerCase()];
       }
-      if (!subject_id && subject_code) {
-        subject_id = subjectMap[subject_code.toLowerCase()];
+      if (!subjectRef && subject_code) {
+        subjectRef = subjectMap[subject_code.toLowerCase()];
       }
 
-      if (!subject_id) {
+      if (!subjectRef?.id) {
         errors.push(`Subject "${subject_name || subject_code}" not found for this class`);
         continue;
       }
+      const subject_id = subjectRef.id;
 
       // Check if marks already exist for this subject (from database)
       const existingMark = existingMarksMap[subject_id];
@@ -658,13 +843,23 @@ export const submitMarks = async (req, res) => {
           message: "Marks already exist for this subject. Use PUT /api/marks/edit to update existing marks.",
         });
       } else {
+        const normalizedMarks = validateAndNormalizeSubjectMarks({
+          subject: subjectRef,
+          external_marks,
+          internal_marks,
+        });
+        if (normalizedMarks.error) {
+          errors.push(normalizedMarks.error);
+          continue;
+        }
+
         // Insert new marks only
         markRecords.push({
           student_id: student.id,
           subject_id: subject_id,
           terminal,
-          external_marks: external_marks !== null && external_marks !== undefined ? Number(external_marks) : null,
-          internal_marks: internal_marks !== null && internal_marks !== undefined ? Number(internal_marks) : null,
+          external_marks: normalizedMarks.external_marks,
+          internal_marks: normalizedMarks.internal_marks,
           status: "SUBMITTED",
           _subject_name: subject_name || subject_code, // Track for error messages
         });
@@ -775,24 +970,20 @@ export const editMarks = async (req, res) => {
     const { class: className, section, terminal, roll_no, marks } = req.body;
 
     // Validation
-    if (!className || !terminal || !roll_no || !marks || !Array.isArray(marks)) {
+    if (!className || !section || !terminal || !roll_no || !marks || !Array.isArray(marks)) {
       return res.status(400).json({
-        message: "class, terminal, roll_no, and marks (array) are required",
+        message: "class, section, terminal, roll_no, and marks (array) are required",
       });
     }
 
     // Find student by class, section, and roll_no
-    let studentQuery = supabase
+    const { data: student, error: studentError } = await supabase
       .from("students")
       .select("id, name, class, section, roll_no")
       .eq("class", className)
-      .eq("roll_no", Number(roll_no));
-
-    if (section) {
-      studentQuery = studentQuery.eq("section", section);
-    }
-
-    const { data: student, error: studentError } = await studentQuery.single();
+      .eq("section", section)
+      .eq("roll_no", Number(roll_no))
+      .single();
 
     if (studentError || !student) {
       return res.status(404).json({ 
@@ -800,31 +991,16 @@ export const editMarks = async (req, res) => {
       });
     }
 
-    // Get class subjects to validate subject names/codes
-    // Filter by section if provided (subjects are section-specific)
-    let classSubjectsQuery = supabase
-      .from("class_subjects")
-      .select(`
-        subject_id,
-        section,
-        subjects (
-          id,
-          name,
-          code
-        )
-      `)
-      .eq("class", className);
-
-    // If section is provided, filter by section
-    if (section) {
-      classSubjectsQuery = classSubjectsQuery.eq("section", section);
-    }
-
-    const { data: classSubjects, error: csError } = await classSubjectsQuery;
+    // Get class subjects (prefer class+section, fallback to class-level)
+    const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
+      className,
+      section
+    );
 
     if (csError || !classSubjects?.length) {
       return res.status(404).json({ 
-        message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}` 
+        message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}`,
+        note: "Add subjects to class using POST /api/subjects/add",
       });
     }
 
@@ -832,8 +1008,14 @@ export const editMarks = async (req, res) => {
     const subjectMap = {};
     classSubjects.forEach((cs) => {
       const subject = cs.subjects;
-      subjectMap[subject.name.toLowerCase()] = subject.id;
-      subjectMap[subject.code.toLowerCase()] = subject.id;
+      if (!subject?.id) return;
+      const subjectDetails = {
+        id: subject.id,
+        name: subject.name,
+        code: subject.code,
+      };
+      subjectMap[String(subject.name || "").toLowerCase()] = subjectDetails;
+      subjectMap[String(subject.code || "").toLowerCase()] = subjectDetails;
     });
 
     // Get existing marks for this student and terminal
@@ -871,7 +1053,8 @@ export const editMarks = async (req, res) => {
       }
 
       const subjectKey = (subject_name || subject_code).toLowerCase();
-      const subject_id = subjectMap[subjectKey];
+      const subjectRef = subjectMap[subjectKey];
+      const subject_id = subjectRef?.id;
 
       if (!subject_id) {
         errors.push(`Subject "${subject_name || subject_code}" not found for this class`);
@@ -889,12 +1072,22 @@ export const editMarks = async (req, res) => {
         continue;
       }
 
+      const normalizedMarks = validateAndNormalizeSubjectMarks({
+        subject: subjectRef,
+        external_marks,
+        internal_marks,
+      });
+      if (normalizedMarks.error) {
+        errors.push(normalizedMarks.error);
+        continue;
+      }
+
       // Update existing marks
       const { data: updatedMark, error: updateError } = await supabase
         .from("marks")
         .update({
-          external_marks: external_marks !== null && external_marks !== undefined ? Number(external_marks) : null,
-          internal_marks: internal_marks !== null && internal_marks !== undefined ? Number(internal_marks) : null,
+          external_marks: normalizedMarks.external_marks,
+          internal_marks: normalizedMarks.internal_marks,
           status: "SUBMITTED",
           updated_at: new Date().toISOString(),
         })
@@ -1019,12 +1212,12 @@ export const publishResult = async (req, res) => {
         .select(`
           subject_id,
           section,
-          subjects (
-            id,
-            name,
-            code
-          )
-        `)
+            subjects (
+              id,
+              name,
+              code
+            )
+          `)
         .eq("class", className);
       
       const fallbackResult = await fallbackQuery;
@@ -1058,11 +1251,11 @@ export const publishResult = async (req, res) => {
       });
     }
 
-    // Calculate total max marks (default: 80 external + 20 internal = 100 per subject)
-    // Drawing subject typically has 50 external + 0 internal = 50 total
-    // For now, using default 100 per subject (can be customized later)
-    const DEFAULT_MAX_MARKS = 100; // 80 external + 20 internal
-    const totalMaxMarks = classSubjects.length * DEFAULT_MAX_MARKS;
+    // Calculate total max marks based on subject maxima.
+    const totalMaxMarks = classSubjects.reduce(
+      (sum, cs) => sum + getSubjectMaxMarks(cs.subjects),
+      0
+    );
 
     // First pass: Calculate percentages for all students to determine ranking
     const studentResults = [];
@@ -1169,6 +1362,54 @@ export const publishResult = async (req, res) => {
       }
     }
 
+    let promotion = null;
+    if (shouldAutoPromote(terminal)) {
+      const promotionTarget = getPromotionTarget(className);
+
+      if (!promotionTarget) {
+        errors.push(`Auto-promotion skipped: no promotion rule configured for class "${className}"`);
+      } else {
+        const promotedStudentIds = publishedResults.map((r) => r.student_id);
+
+        if (promotedStudentIds.length > 0) {
+          const { data: promotedRows, error: promoteError } = await supabase
+            .from("students")
+            .update({ class: promotionTarget.nextClass })
+            .in("id", promotedStudentIds)
+            .select("id");
+
+          if (promoteError) {
+            errors.push(`Auto-promotion failed for class "${className}": ${promoteError.message}`);
+          } else {
+            promotion = {
+              from_class: className,
+              to_class: promotionTarget.nextClass,
+              passed_out: promotionTarget.passedOut,
+              promoted_students: promotedRows?.length || promotedStudentIds.length,
+            };
+
+            if (promotionTarget.passedOut) {
+              const { data: statusRows, error: statusError } = await supabase
+                .from("students")
+                .update({ status: PASSED_OUT_STATUS })
+                .in("id", promotedStudentIds)
+                .select("id");
+
+              if (statusError) {
+                if (isMissingColumnError(statusError, "status")) {
+                  promotion.status_update = "skipped (students table has no status column)";
+                } else {
+                  errors.push(`Passed-out status update failed: ${statusError.message}`);
+                }
+              } else {
+                promotion.status_updated = statusRows?.length || promotedStudentIds.length;
+              }
+            }
+          }
+        }
+      }
+    }
+
     res.json({
       success: true,
       message: `Results published for ${publishedResults.length} student(s)`,
@@ -1177,6 +1418,7 @@ export const publishResult = async (req, res) => {
       terminal,
       published: publishedResults.length,
       total_students: students.length,
+      promotion: promotion || undefined,
       results: publishedResults,
       errors: errors.length > 0 ? errors : undefined,
     });
