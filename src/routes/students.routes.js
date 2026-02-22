@@ -25,7 +25,7 @@ const isValidUuid = (value) => UUID_REGEX.test(String(value || ""));
 
 const getDefaultAcademicYear = () => {
   const now = new Date();
-  const currentYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const currentYear = now.getMonth() >= 2 ? now.getFullYear() : now.getFullYear() - 1;
   return `${currentYear}-${String(currentYear + 1).slice(-2)}`;
 };
 
