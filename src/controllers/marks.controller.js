@@ -47,6 +47,30 @@ const isMissingColumnError = (error, columnName) => {
   );
 };
 
+const buildAcademicYearCandidates = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+
+  const normalized = raw.replace(/\s+/g, "");
+  const shortMatch = normalized.match(/^(\d{4})-(\d{2})$/);
+  if (shortMatch) {
+    const startYear = shortMatch[1];
+    const endShort = shortMatch[2];
+    const endLong = `${startYear.slice(0, 2)}${endShort}`;
+    return Array.from(new Set([normalized, `${startYear}-${endLong}`]));
+  }
+
+  const longMatch = normalized.match(/^(\d{4})-(\d{4})$/);
+  if (longMatch) {
+    const startYear = longMatch[1];
+    const endLong = longMatch[2];
+    const endShort = endLong.slice(-2);
+    return Array.from(new Set([normalized, `${startYear}-${endShort}`]));
+  }
+
+  return [];
+};
+
 /**
  * Resolve class subjects with section-first strategy.
  * - If section-specific mappings exist, use them.
@@ -467,234 +491,418 @@ export const getClassSubjects = async (req, res) => {
  */
 export const getResultByClassRoll = async (req, res) => {
   try {
-    const { class: cls, roll, terminal, section } = req.query;
+    const {
+      class: cls,
+      roll,
+      terminal,
+      term,
+      section,
+      academic_year: academicYear,
+    } = req.query;
+    const requestedAcademicYearRaw = String(
+      academicYear || req.query?.session || req.query?.academic_session || ""
+    ).trim();
+    const requestedAcademicYears = buildAcademicYearCandidates(
+      requestedAcademicYearRaw
+    );
 
-    if (!cls || !roll || !terminal) {
+    const requestedTerminalRaw = String(terminal || term || "").trim();
+
+    if (!cls || !roll || !requestedTerminalRaw || !requestedAcademicYearRaw) {
       return res.status(400).json({
-        message: "class, roll, and terminal are required",
+        message: "class, roll, terminal, and academic_year are required",
       });
     }
 
-    const requestedTerminal = String(terminal || "").trim();
-    const terminalLower = requestedTerminal.toLowerCase();
+    if (!requestedAcademicYears.length) {
+      return res.status(400).json({
+        message: "academic_year must be in format YYYY-YY or YYYY-YYYY",
+      });
+    }
 
-    if (!ALLOWED_RESULT_TERMINALS.has(terminalLower)) {
+    const normalizeTerminal = (value) => {
+      const token = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "")
+        .replace(/term$/, "");
+
+      if (token === "1" || token === "first") return "First";
+      if (token === "2" || token === "second") return "Second";
+      if (token === "3" || token === "third") return "Third";
+      if (
+        token === "annual" ||
+        token === "final" 
+      ) {
+        return "Annual";
+      }
+
+      return null;
+    };
+
+    const normalizeStoredTerminal = (value) => {
+      const normalized = normalizeTerminal(value);
+      if (!normalized) return null;
+      return normalized;
+    };
+
+    const requestedTerminal = normalizeTerminal(requestedTerminalRaw);
+    if (!requestedTerminal) {
       return res.status(404).json({
         message: "Result not found",
       });
     }
 
-    // Rest of the code remains the same for single terminal
-    // ... (existing single terminal logic)
+    if (!/^\d+$/.test(String(roll).trim()) || Number(roll) <= 0) {
+      return res.status(400).json({
+        message: "roll must be a positive numeric value",
+      });
+    }
+
+    const requestedScopeTerminal =
+      requestedTerminal === "Annual" ? "Third" : requestedTerminal;
+    const scopeIndexMap = { First: 1, Second: 2, Third: 3 };
+    const requestedScopeIndex = scopeIndexMap[requestedScopeTerminal];
+
     let studentQuery = supabase
       .from("students")
       .select("*")
       .eq("class", cls)
-      .eq("roll_no", Number(roll));
-    
-    // Add section filter if provided
+      .eq("roll_no", Number(roll))
+      .in("academic_year", requestedAcademicYears);
+
     if (section) {
       studentQuery = studentQuery.eq("section", section);
     }
-    
-    const { data: student, error: studentError } = await studentQuery.single();
 
-    if (studentError || !student) {
-      return res.status(404).json({ message: "Student not found" });
+    const { data: students, error: studentError } = await studentQuery.limit(5);
+
+    if (studentError) {
+      return res.status(500).json({
+        message: "Failed to fetch student",
+        error: studentError.message,
+      });
     }
 
-    // 2️⃣ Get class subjects (with section filter if provided)
-    // Try to get subjects filtered by section first, then fallback to all subjects for the class
-    let classSubjects = null;
-    let csError = null;
-
-    // First attempt: Try with section filter if section is provided
-    if (section) {
-      const { data: sectionData, error: sectionError } = await supabase
-        .from("class_subjects")
-        .select(`
-          subject_id,
-          section,
-          sequence,
-          subjects (
-            id,
-            code,
-            name
-          )
-        `)
-        .eq("class", cls)
-        .eq("section", section)
-        .order("sequence", { ascending: true });
-
-      if (!sectionError && sectionData && sectionData.length > 0) {
-        classSubjects = sectionData;
-      } else if (sectionError && sectionError.message && sectionError.message.includes("section")) {
-        // Section column doesn't exist, fall through to get all subjects
-        console.log("Section column not found, fetching all subjects for class");
-      } else {
-        // Section filter returned no results, try without section filter
-        console.log(`No subjects found for section "${section}", trying all subjects for class`);
-      }
+    if (!students?.length) {
+      return res.status(404).json({
+        message: `Student not found for academic_year "${requestedAcademicYearRaw}"`,
+      });
     }
 
-    // Fallback: Get all subjects for the class (if section filter didn't work or wasn't provided)
-    if (!classSubjects) {
-      const { data: allData, error: allError } = await supabase
-        .from("class_subjects")
-        .select(`
-          subject_id,
-          sequence,
-          subjects (
-            id,
-            code,
-            name
-          )
-        `)
-        .eq("class", cls)
-        .order("sequence", { ascending: true });
-
-      classSubjects = allData;
-      csError = allError;
+    if (students.length > 1) {
+      return res.status(409).json({
+        message: "Multiple students found for the same class and roll. Provide section.",
+      });
     }
+
+    const student = students[0];
+
+    const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
+      cls,
+      section
+    );
 
     if (csError) {
       console.error("Error fetching class subjects:", csError);
-      return res.status(500).json({ 
+      return res.status(500).json({
         message: "Failed to fetch subjects for this class",
-        error: csError.message 
+        error: csError.message,
       });
     }
 
     if (!classSubjects || classSubjects.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: `No subjects found for class "${cls}"${section ? ` section "${section}"` : ""}`,
-        note: section ? "Make sure subjects are added to this section using POST /api/subjects/add" : "Make sure subjects are added to this class using POST /api/subjects/add"
+        note: section
+          ? "Make sure subjects are added to this section using POST /api/subjects/add"
+          : "Make sure subjects are added to this class using POST /api/subjects/add",
       });
     }
 
-    // 3️⃣ Get marks for student (all subjects + terminal)
-    const subjectIds = classSubjects.map((cs) => cs.subject_id || cs.subjects?.id).filter(Boolean);
-    let { data: marksData, error: marksError } = await supabase
+    const normalizedSubjects = classSubjects.filter((cs) => cs?.subjects?.id);
+    if (!normalizedSubjects.length) {
+      return res.status(404).json({
+        message: `No valid subjects found for class "${cls}"`,
+      });
+    }
+
+    const subjectIds = normalizedSubjects
+      .map((cs) => cs.subject_id || cs.subjects?.id)
+      .filter(Boolean);
+
+    const { data: marksData, error: marksError } = await supabase
       .from("marks")
       .select("*")
       .eq("student_id", student.id)
-      .eq("terminal", requestedTerminal)
       .in("subject_id", subjectIds);
 
     if (marksError) {
       return res.status(500).json({ message: marksError.message });
     }
 
-    // If annual marks are not present, fallback to latest available terminal marks.
-    let resolvedTerminal = requestedTerminal;
-    if (terminalLower === "annual" && (!marksData || marksData.length === 0)) {
-      const fallbackTerminals = ["Third", "Second", "First"];
-      for (const fb of fallbackTerminals) {
-        const { data: fallbackMarks, error: fallbackErr } = await supabase
-          .from("marks")
-          .select("*")
-          .eq("student_id", student.id)
-          .eq("terminal", fb)
-          .in("subject_id", subjectIds);
+    const rowTimestamp = (row) => {
+      const source = row?.updated_at || row?.created_at || row?.calculated_at;
+      if (!source) return 0;
+      const ts = new Date(source).getTime();
+      return Number.isFinite(ts) ? ts : 0;
+    };
 
-        if (fallbackErr) {
-          return res.status(500).json({ message: fallbackErr.message });
-        }
+    const terminalRowMap = {
+      First: new Map(),
+      Second: new Map(),
+      Third: new Map(),
+      Annual: new Map(),
+    };
 
-        if (fallbackMarks && fallbackMarks.length > 0) {
-          marksData = fallbackMarks;
-          resolvedTerminal = fb;
-          break;
-        }
+    (marksData || []).forEach((row) => {
+      const canonicalTerminal = normalizeStoredTerminal(row?.terminal || row?.term);
+      if (!canonicalTerminal || !terminalRowMap[canonicalTerminal]) return;
+
+      const subjectId = row.subject_id;
+      if (!subjectId) return;
+
+      const termMap = terminalRowMap[canonicalTerminal];
+      const existing = termMap.get(subjectId);
+      if (!existing || rowTimestamp(row) >= rowTimestamp(existing)) {
+        termMap.set(subjectId, row);
+      }
+    });
+
+    const parseMarkValue = (value) => {
+      if (value === null || value === undefined || value === "") {
+        return { isNumeric: false, numeric: 0, display: "AB" };
+      }
+
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return { isNumeric: true, numeric: value, display: value };
+      }
+
+      const raw = String(value).trim();
+      if (!raw) return { isNumeric: false, numeric: 0, display: "AB" };
+
+      const upper = raw.toUpperCase();
+      if (upper === "AB" || upper === "NA" || upper === "N/A" || upper === "ABSENT") {
+        return { isNumeric: false, numeric: 0, display: upper === "ABSENT" ? "AB" : upper };
+      }
+
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) {
+        return { isNumeric: true, numeric: parsed, display: parsed };
+      }
+
+      return { isNumeric: false, numeric: 0, display: raw };
+    };
+
+    const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
+    const divisionFromPercentage = (percentage) => {
+      if (percentage >= 60) return "First";
+      if (percentage >= 45) return "Second";
+      if (percentage >= 33) return "Third";
+      return "Fail";
+    };
+
+    const buildSingleTermSummary = (terminalName) => {
+      let totalMaxMarks = 0;
+      let totalObtained = 0;
+
+      normalizedSubjects.forEach((cs) => {
+        const subject = cs.subjects;
+        const subjectId = cs.subject_id || subject?.id;
+        if (!subject || !subjectId) return;
+
+        totalMaxMarks += getSubjectMaxMarks(subject);
+
+        const row = terminalRowMap[terminalName].get(subjectId);
+        if (!row) return;
+
+        const external = parseMarkValue(row.external_marks);
+        const internal = parseMarkValue(row.internal_marks);
+        totalObtained += external.numeric + internal.numeric;
+      });
+
+      const percentage =
+        totalMaxMarks > 0 ? round2((totalObtained / totalMaxMarks) * 100) : 0;
+
+      return {
+        total_max_marks: round2(totalMaxMarks),
+        total_obtained: round2(totalObtained),
+        percentage,
+        division: divisionFromPercentage(percentage),
+        rank: null,
+        status: totalObtained > 0 ? "Pending" : "Pending",
+        published_date: null,
+      };
+    };
+
+    const firstTermOnly = buildSingleTermSummary("First");
+    const secondTermOnly = buildSingleTermSummary("Second");
+    const thirdTermOnly = buildSingleTermSummary("Third");
+    const annualTermOnly = buildSingleTermSummary("Annual");
+
+    const emptySummary = {
+      total_max_marks: 0,
+      total_obtained: 0,
+      percentage: 0,
+      division: "Fail",
+      rank: null,
+      status: "Pending",
+      published_date: null,
+    };
+
+    const summaryByColumn = {
+      First: { ...emptySummary },
+      Second: { ...emptySummary },
+      Third: { ...emptySummary },
+      Annual: { ...emptySummary },
+    };
+
+    if (requestedScopeIndex >= 1) {
+      summaryByColumn.First = firstTermOnly;
+    }
+    if (requestedScopeIndex >= 2) {
+      summaryByColumn.Second = secondTermOnly;
+    }
+    if (requestedScopeIndex >= 3) {
+      summaryByColumn.Third = thirdTermOnly;
+      if (requestedTerminal === "Annual") {
+        summaryByColumn.Annual = annualTermOnly;
       }
     }
 
-    // 4️⃣ Build response with marks
-    const marksMap = {};
-    marksData?.forEach((m) => {
-      marksMap[m.subject_id] = {
-        external: m.external_marks,
-        internal: m.internal_marks,
-        total: (m.external_marks || 0) + (m.internal_marks || 0),
-      };
-    });
+    const resolvedTerminal = requestedTerminal;
 
-    // 5️⃣ Calculate summary
-    let totalMaxMarks = 0;
-    let totalObtained = 0;
-    const marksDetails = [];
+    const selectedMarksMap = terminalRowMap[resolvedTerminal] || new Map();
 
-    classSubjects.forEach((cs) => {
+    const marksDetails = normalizedSubjects.map((cs) => {
       const subject = cs.subjects;
-      if (!subject || !subject.id) return; // Skip if subject data is missing
-      
+      const subjectId = cs.subject_id || subject?.id;
+      if (!subject || !subjectId) return null;
+
       const maxMarks = getSubjectMaxMarks(subject);
-      const subjectId = cs.subject_id || subject.id;
-      const obtained = marksMap[subjectId] || {
-        external: null,
-        internal: null,
-        total: 0,
-      };
+      const row = selectedMarksMap.get(subjectId);
+      const external = parseMarkValue(row?.external_marks);
+      const internal = parseMarkValue(row?.internal_marks);
+      const subjectTotal = round2(external.numeric + internal.numeric);
 
-      totalMaxMarks += maxMarks;
-      totalObtained += obtained.total || 0;
-
-      marksDetails.push({
+      return {
         subject: subject.name,
         code: subject.code,
         max_marks: maxMarks,
-        external_marks: obtained.external || "AB",
-        internal_marks: obtained.internal || "AB",
-        total_obtained: obtained.total || "AB",
-      });
-    });
+        external_marks: external.display,
+        internal_marks: internal.display,
+        total_obtained: subjectTotal > 0 ? subjectTotal : "AB",
+      };
+    }).filter(Boolean);
 
-    const percentage = totalMaxMarks > 0 ? ((totalObtained / totalMaxMarks) * 100).toFixed(2) : "0.00";
-    const division =
-      percentage >= 60
-        ? "First"
-        : percentage >= 45
-        ? "Second"
-        : percentage >= 33
-        ? "Third"
-        : "Fail";
+    const termLabelToKey = {
+      First: "first_term",
+      Second: "second_term",
+      Third: "third_term",
+      Annual: "annual_term",
+    };
+    const termLabelToResultSummaryTerminal = {
+      First: "First",
+      Second: "Second",
+      Third: "Third",
+      Annual: "Annual",
+    };
 
-    // 6️⃣ Check if result is published and use published data if available
-    const { data: publishedSummary } = await supabase
-      .from("result_summary")
-      .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
-      .eq("student_id", student.id)
-      .eq("terminal", resolvedTerminal)
-      .maybeSingle();
+    const scopedTermLabels =
+      requestedScopeIndex === 1
+        ? ["First"]
+        : requestedScopeIndex === 2
+        ? ["First", "Second"]
+        : requestedTerminal === "Annual"
+        ? ["First", "Second", "Third", "Annual"]
+        : ["First", "Second", "Third"];
 
-    // Use published summary data if available, otherwise use calculated values
-    let finalTotalMaxMarks = totalMaxMarks;
-    let finalTotalObtained = totalObtained;
-    let finalPercentage = percentage;
-    let finalDivision = division;
-    let finalRank = null;
-    let publishedDate = null;
-    const status = publishedSummary?.status || (totalObtained > 0 ? "Pending" : "Pending");
+    const normalizeResultSummaryTerminal = (value) => {
+      const token = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "")
+        .replace(/term$/, "");
 
-    if (publishedSummary && publishedSummary.status === "Published") {
-      // Use published values if result is published
-      finalTotalMaxMarks = publishedSummary.total_marks || totalMaxMarks;
-      finalTotalObtained = publishedSummary.total_obtained || totalObtained;
-      finalPercentage = publishedSummary.percentage || percentage;
-      finalDivision = publishedSummary.division || division;
-      finalRank = publishedSummary.rank || null;
-      // Use calculated_at as published_date
-      if (publishedSummary.calculated_at) {
-        publishedDate = new Date(publishedSummary.calculated_at).toISOString().split('T')[0];
+      if (token === "first" || token === "1") return "First";
+      if (token === "second" || token === "2") return "Second";
+      if (token === "third" || token === "3") return "Third";
+      if (token === "annual" || token === "final" || token === "third/final") {
+        return "Annual";
       }
-    }
-    
-    // Ensure total_obtained is a number, not rounded incorrectly
-    const totalObtainedRounded = finalTotalObtained > 0 ? Math.round(finalTotalObtained * 100) / 100 : 0;
-    // Convert percentage to number with 2 decimals
-    const percentageNum = parseFloat(finalPercentage);
+      return null;
+    };
 
-    // 7️⃣ Response
+    const publishTerminals = Array.from(
+      new Set(
+        scopedTermLabels.map((label) => termLabelToResultSummaryTerminal[label])
+      )
+    );
+
+    if (publishTerminals.length) {
+      const { data: publishedRows, error: publishedError } = await supabase
+        .from("result_summary")
+        .select("terminal, status, rank, calculated_at")
+        .eq("student_id", student.id)
+        .in("terminal", publishTerminals);
+
+      if (publishedError) {
+        return res.status(500).json({
+          message: "Failed to fetch published summary",
+          error: publishedError.message,
+        });
+      }
+
+      const publishedMap = new Map();
+      (publishedRows || []).forEach((row) => {
+        const normalizedLabel = normalizeResultSummaryTerminal(row.terminal);
+        if (normalizedLabel) {
+          publishedMap.set(normalizedLabel, row);
+        }
+      });
+
+      scopedTermLabels.forEach((label) => {
+        const row = publishedMap.get(label);
+        if (!row) return;
+
+        summaryByColumn[label] = {
+          ...summaryByColumn[label],
+          rank: row.rank ?? null,
+          status: row.status || summaryByColumn[label].status,
+          published_date: row.calculated_at
+            ? new Date(row.calculated_at).toISOString().split("T")[0]
+            : null,
+        };
+      });
+    }
+
+    const selectedSummaryLabel =
+      requestedTerminal === "Annual" ? "Annual" : requestedScopeTerminal;
+    const selectedSummary = summaryByColumn[selectedSummaryLabel];
+
+    const buildScopedMetric = (selector) => {
+      const metric = {};
+      scopedTermLabels.forEach((label) => {
+        const key = termLabelToKey[label];
+        metric[key] = selector(summaryByColumn[label]);
+      });
+      return metric;
+    };
+
+    const summaryReport = {
+      total_marks: buildScopedMetric((row) => row.total_max_marks),
+      marks_obtained: buildScopedMetric((row) => row.total_obtained),
+      percentage: buildScopedMetric((row) => row.percentage),
+      division: buildScopedMetric((row) => row.division),
+      rank: buildScopedMetric((row) => row.rank),
+      published_date: buildScopedMetric((row) => row.published_date),
+    };
+
+    const terminals = scopedTermLabels.map((label) => ({
+      terminal: label,
+      summary: summaryByColumn[label],
+    }));
+
     res.json({
       student: {
         id: student.id,
@@ -703,19 +911,15 @@ export const getResultByClassRoll = async (req, res) => {
         class: student.class,
         roll_no: student.roll_no,
         section: student.section,
+        academic_year: student.academic_year || requestedAcademicYearRaw,
       },
-      terminal,
-      resolved_terminal: resolvedTerminal !== requestedTerminal ? resolvedTerminal : undefined,
+      terminal: requestedTerminalRaw,
+      resolved_terminal:
+        requestedTerminal === "Annual" ? resolvedTerminal : undefined,
       marks: marksDetails,
-      summary: {
-        total_max_marks: finalTotalMaxMarks,
-        total_obtained: totalObtainedRounded,
-        percentage: percentageNum,
-        division: finalDivision,
-        rank: finalRank,
-        status,
-        published_date: publishedDate,
-      },
+      summary: selectedSummary,
+      summary_report: summaryReport,
+      terminals,
     });
   } catch (err) {
     console.error(err);
