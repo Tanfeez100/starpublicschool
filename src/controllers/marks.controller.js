@@ -1,9 +1,17 @@
 import { supabase } from "../services/supabase.js";
 
-const PROMOTION_TERMINALS = new Set(["annual"]);
+const PROMOTION_TERMINALS = new Set(["annual", "final"]);
 const ALLOWED_RESULT_TERMINALS = new Set(["first", "second", "third", "annual"]);
 const PASSED_OUT_CLASS = "Passed Out";
 const PASSED_OUT_STATUS = "Passed Out";
+
+const normalizePromotionTerminal = (terminal) =>
+  String(terminal || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/_/g, "")
+    .replace(/term$/, "");
 
 const normalizeClassForPromotion = (className) => {
   const value = String(className || "").trim().toUpperCase();
@@ -36,7 +44,7 @@ const getPromotionTarget = (className) => {
 };
 
 const shouldAutoPromote = (terminal) =>
-  PROMOTION_TERMINALS.has(String(terminal || "").trim().toLowerCase());
+  PROMOTION_TERMINALS.has(normalizePromotionTerminal(terminal));
 
 const isMissingColumnError = (error, columnName) => {
   const message = String(error?.message || "").toLowerCase();
