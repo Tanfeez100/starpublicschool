@@ -23,6 +23,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/students", studentsRoutes);
 app.use("/api/marks", marksRoutes);
 app.use("/api/result", resultRoutes);
+app.use("/api/results", resultRoutes);
 app.use("/api/subjects", subjectRoutes);
 app.use("/api/bills", billRoutes);
 

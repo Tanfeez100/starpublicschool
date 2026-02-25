@@ -79,6 +79,125 @@ const buildAcademicYearCandidates = (value) => {
   return [];
 };
 
+const toPositiveInt = (value, fallback) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.floor(parsed);
+};
+
+const RESULT_BY_ROLL_CACHE_TTL_MS = toPositiveInt(
+  process.env.RESULT_BY_ROLL_CACHE_TTL_MS,
+  60000
+);
+const MARKS_BY_CLASS_CACHE_TTL_MS = toPositiveInt(
+  process.env.MARKS_BY_CLASS_CACHE_TTL_MS,
+  30000
+);
+const MAX_READ_CACHE_ITEMS = toPositiveInt(
+  process.env.READ_CACHE_MAX_ITEMS,
+  300
+);
+const RESULT_TERMINAL_LABELS = ["First", "Second", "Third", "Annual"];
+
+const readResponseCache = new Map();
+
+const buildReadCacheKey = (prefix, params = {}) => {
+  const serialized = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${String(value).trim()}`)
+    .join("&");
+
+  return `${prefix}:${serialized}`;
+};
+
+const getCachedReadResponse = (key) => {
+  const entry = readResponseCache.get(key);
+  if (!entry) return null;
+
+  if (entry.expiresAt <= Date.now()) {
+    readResponseCache.delete(key);
+    return null;
+  }
+
+  return entry.payload;
+};
+
+const trimReadCache = () => {
+  const now = Date.now();
+  for (const [key, entry] of readResponseCache) {
+    if (entry.expiresAt <= now) {
+      readResponseCache.delete(key);
+    }
+  }
+
+  while (readResponseCache.size > MAX_READ_CACHE_ITEMS) {
+    const oldestKey = readResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    readResponseCache.delete(oldestKey);
+  }
+};
+
+const setCachedReadResponse = (key, payload, ttlMs) => {
+  if (!payload || ttlMs <= 0) return;
+
+  readResponseCache.set(key, {
+    payload,
+    expiresAt: Date.now() + ttlMs,
+  });
+
+  if (readResponseCache.size > MAX_READ_CACHE_ITEMS) {
+    trimReadCache();
+  }
+};
+
+const setReadCacheHeaders = ({
+  res,
+  ttlMs,
+  cacheHit,
+  visibility = "public",
+}) => {
+  const seconds = Math.max(0, Math.floor(ttlMs / 1000));
+  res.set("Cache-Control", `${visibility}, max-age=${seconds}, stale-while-revalidate=${seconds}`);
+  res.set("X-Cache", cacheHit ? "HIT" : "MISS");
+};
+
+const invalidateReadCacheByPrefix = (prefixes = []) => {
+  if (!prefixes.length) {
+    readResponseCache.clear();
+    return;
+  }
+
+  for (const key of Array.from(readResponseCache.keys())) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) {
+      readResponseCache.delete(key);
+    }
+  }
+};
+
+const normalizeResultTerminalLabel = (value) => {
+  const token = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/term$/, "");
+  const compact = token.replace(/[\/_-]/g, "");
+
+  if (token === "1" || token === "first") return "First";
+  if (token === "2" || token === "second") return "Second";
+  if (token === "3" || token === "third") return "Third";
+  if (
+    token === "annual" ||
+    token === "final" ||
+    token === "third/final" ||
+    compact === "thirdfinal"
+  ) {
+    return "Annual";
+  }
+
+  return null;
+};
+
 /**
  * Resolve class subjects with section-first strategy.
  * - If section-specific mappings exist, use them.
@@ -510,51 +629,32 @@ export const getResultByClassRoll = async (req, res) => {
     const requestedAcademicYearRaw = String(
       academicYear || req.query?.session || req.query?.academic_session || ""
     ).trim();
+    const hasRequestedAcademicYear = requestedAcademicYearRaw.length > 0;
     const requestedAcademicYears = buildAcademicYearCandidates(
       requestedAcademicYearRaw
     );
 
     const requestedTerminalRaw = String(terminal || term || "").trim();
 
-    if (!cls || !roll || !requestedTerminalRaw || !requestedAcademicYearRaw) {
+    if (!cls || !roll || !requestedTerminalRaw) {
       return res.status(400).json({
-        message: "class, roll, terminal, and academic_year are required",
+        message: "class, roll, and terminal are required",
       });
     }
 
-    if (!requestedAcademicYears.length) {
+    if (hasRequestedAcademicYear && !requestedAcademicYears.length) {
       return res.status(400).json({
         message: "academic_year must be in format YYYY-YY or YYYY-YYYY",
       });
     }
 
-    const normalizeTerminal = (value) => {
-      const token = String(value || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, "")
-        .replace(/term$/, "");
-
-      if (token === "1" || token === "first") return "First";
-      if (token === "2" || token === "second") return "Second";
-      if (token === "3" || token === "third") return "Third";
-      if (
-        token === "annual" ||
-        token === "final" 
-      ) {
-        return "Annual";
-      }
-
-      return null;
-    };
-
     const normalizeStoredTerminal = (value) => {
-      const normalized = normalizeTerminal(value);
+      const normalized = normalizeResultTerminalLabel(value);
       if (!normalized) return null;
       return normalized;
     };
 
-    const requestedTerminal = normalizeTerminal(requestedTerminalRaw);
+    const requestedTerminal = normalizeResultTerminalLabel(requestedTerminalRaw);
     if (!requestedTerminal) {
       return res.status(404).json({
         message: "Result not found",
@@ -567,23 +667,56 @@ export const getResultByClassRoll = async (req, res) => {
       });
     }
 
-    const requestedScopeTerminal =
-      requestedTerminal === "Annual" ? "Third" : requestedTerminal;
-    const scopeIndexMap = { First: 1, Second: 2, Third: 3 };
-    const requestedScopeIndex = scopeIndexMap[requestedScopeTerminal];
+    const resultCacheBaseKey = buildReadCacheKey("resultByRoll", {
+      class: cls,
+      roll,
+      section,
+      academic_year: requestedAcademicYearRaw,
+    });
+    const buildResultCacheKeyForTerminal = (terminalLabel) =>
+      `${resultCacheBaseKey}&terminal=${terminalLabel}`;
+    const requestedResultCacheKey = buildResultCacheKeyForTerminal(requestedTerminal);
 
-    let studentQuery = supabase
-      .from("students")
-      .select("*")
-      .eq("class", cls)
-      .eq("roll_no", Number(roll))
-      .in("academic_year", requestedAcademicYears);
-
-    if (section) {
-      studentQuery = studentQuery.eq("section", section);
+    const cachedResultPayload = getCachedReadResponse(requestedResultCacheKey);
+    if (cachedResultPayload) {
+      setReadCacheHeaders({
+        res,
+        ttlMs: RESULT_BY_ROLL_CACHE_TTL_MS,
+        cacheHit: true,
+        visibility: "public",
+      });
+      return res.json(cachedResultPayload);
     }
 
-    const { data: students, error: studentError } = await studentQuery.limit(5);
+    const buildStudentQuery = () => {
+      let query = supabase
+        .from("students")
+        .select("*")
+        .eq("class", cls)
+        .eq("roll_no", Number(roll));
+
+      if (section) {
+        query = query.eq("section", section);
+      }
+
+      return query;
+    };
+
+    const extractDistinctValues = (rows, key) =>
+      Array.from(
+        new Set(
+          (rows || [])
+            .map((row) => String(row?.[key] || "").trim())
+            .filter(Boolean)
+        )
+      );
+
+    let studentQuery = buildStudentQuery();
+    if (hasRequestedAcademicYear) {
+      studentQuery = studentQuery.in("academic_year", requestedAcademicYears);
+    }
+
+    const { data: students, error: studentError } = await studentQuery.limit(20);
 
     if (studentError) {
       return res.status(500).json({
@@ -593,18 +726,72 @@ export const getResultByClassRoll = async (req, res) => {
     }
 
     if (!students?.length) {
+      if (hasRequestedAcademicYear) {
+        const { data: fallbackStudents } = await buildStudentQuery().limit(20);
+        const availableAcademicYears = extractDistinctValues(
+          fallbackStudents,
+          "academic_year"
+        );
+
+        return res.status(404).json({
+          message: `Student not found for academic_year "${requestedAcademicYearRaw}"`,
+          available_academic_years:
+            availableAcademicYears.length > 0 ? availableAcademicYears : undefined,
+        });
+      }
+
       return res.status(404).json({
-        message: `Student not found for academic_year "${requestedAcademicYearRaw}"`,
+        message: "Student not found",
       });
     }
 
-    if (students.length > 1) {
+    let resolvedStudents = students;
+    if (!hasRequestedAcademicYear) {
+      const activeStudents = students.filter(
+        (row) => String(row?.status || "").toLowerCase() === "active"
+      );
+      if (activeStudents.length === 1) {
+        resolvedStudents = activeStudents;
+      }
+    }
+
+    if (resolvedStudents.length > 1) {
+      const availableSections = extractDistinctValues(resolvedStudents, "section");
+      if (!section && availableSections.length > 1) {
+        return res.status(409).json({
+          message: "Multiple students found for the same class and roll. Provide section.",
+          sections: availableSections,
+        });
+      }
+
+      if (!hasRequestedAcademicYear) {
+        const availableAcademicYears = extractDistinctValues(
+          resolvedStudents,
+          "academic_year"
+        );
+        if (availableAcademicYears.length > 1) {
+          return res.status(409).json({
+            message:
+              "Multiple students found across academic years. Provide academic_year.",
+            available_academic_years: availableAcademicYears,
+          });
+        }
+      }
+    }
+
+    if (resolvedStudents.length > 1) {
       return res.status(409).json({
         message: "Multiple students found for the same class and roll. Provide section.",
       });
     }
 
-    const student = students[0];
+    const student = resolvedStudents[0];
+
+    if (!student) {
+      return res.status(404).json({
+        message: "Student not found",
+      });
+    }
 
     const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
       cls,
@@ -748,60 +935,12 @@ export const getResultByClassRoll = async (req, res) => {
     const thirdTermOnly = buildSingleTermSummary("Third");
     const annualTermOnly = buildSingleTermSummary("Annual");
 
-    const emptySummary = {
-      total_max_marks: 0,
-      total_obtained: 0,
-      percentage: 0,
-      division: "Fail",
-      rank: null,
-      status: "Pending",
-      published_date: null,
-    };
-
     const summaryByColumn = {
-      First: { ...emptySummary },
-      Second: { ...emptySummary },
-      Third: { ...emptySummary },
-      Annual: { ...emptySummary },
+      First: { ...firstTermOnly },
+      Second: { ...secondTermOnly },
+      Third: { ...thirdTermOnly },
+      Annual: { ...annualTermOnly },
     };
-
-    if (requestedScopeIndex >= 1) {
-      summaryByColumn.First = firstTermOnly;
-    }
-    if (requestedScopeIndex >= 2) {
-      summaryByColumn.Second = secondTermOnly;
-    }
-    if (requestedScopeIndex >= 3) {
-      summaryByColumn.Third = thirdTermOnly;
-      if (requestedTerminal === "Annual") {
-        summaryByColumn.Annual = annualTermOnly;
-      }
-    }
-
-    const resolvedTerminal = requestedTerminal;
-
-    const selectedMarksMap = terminalRowMap[resolvedTerminal] || new Map();
-
-    const marksDetails = normalizedSubjects.map((cs) => {
-      const subject = cs.subjects;
-      const subjectId = cs.subject_id || subject?.id;
-      if (!subject || !subjectId) return null;
-
-      const maxMarks = getSubjectMaxMarks(subject);
-      const row = selectedMarksMap.get(subjectId);
-      const external = parseMarkValue(row?.external_marks);
-      const internal = parseMarkValue(row?.internal_marks);
-      const subjectTotal = round2(external.numeric + internal.numeric);
-
-      return {
-        subject: subject.name,
-        code: subject.code,
-        max_marks: maxMarks,
-        external_marks: external.display,
-        internal_marks: internal.display,
-        total_obtained: subjectTotal > 0 ? subjectTotal : "AB",
-      };
-    }).filter(Boolean);
 
     const termLabelToKey = {
       First: "first_term",
@@ -809,50 +948,11 @@ export const getResultByClassRoll = async (req, res) => {
       Third: "third_term",
       Annual: "annual_term",
     };
-    const termLabelToResultSummaryTerminal = {
-      First: "First",
-      Second: "Second",
-      Third: "Third",
-      Annual: "Annual",
-    };
-
-    const scopedTermLabels =
-      requestedScopeIndex === 1
-        ? ["First"]
-        : requestedScopeIndex === 2
-        ? ["First", "Second"]
-        : requestedTerminal === "Annual"
-        ? ["First", "Second", "Third", "Annual"]
-        : ["First", "Second", "Third"];
-
-    const normalizeResultSummaryTerminal = (value) => {
-      const token = String(value || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, "")
-        .replace(/term$/, "");
-
-      if (token === "first" || token === "1") return "First";
-      if (token === "second" || token === "2") return "Second";
-      if (token === "third" || token === "3") return "Third";
-      if (token === "annual" || token === "final" || token === "third/final") {
-        return "Annual";
-      }
-      return null;
-    };
-
-    const publishTerminals = Array.from(
-      new Set(
-        scopedTermLabels.map((label) => termLabelToResultSummaryTerminal[label])
-      )
-    );
-
-    if (publishTerminals.length) {
+    if (RESULT_TERMINAL_LABELS.length) {
       const { data: publishedRows, error: publishedError } = await supabase
         .from("result_summary")
         .select("terminal, status, rank, calculated_at")
-        .eq("student_id", student.id)
-        .in("terminal", publishTerminals);
+        .eq("student_id", student.id);
 
       if (publishedError) {
         return res.status(500).json({
@@ -863,13 +963,23 @@ export const getResultByClassRoll = async (req, res) => {
 
       const publishedMap = new Map();
       (publishedRows || []).forEach((row) => {
-        const normalizedLabel = normalizeResultSummaryTerminal(row.terminal);
-        if (normalizedLabel) {
+        const normalizedLabel = normalizeResultTerminalLabel(row.terminal);
+        if (!normalizedLabel) return;
+
+        const existing = publishedMap.get(normalizedLabel);
+        const existingTs = existing?.calculated_at
+          ? new Date(existing.calculated_at).getTime()
+          : 0;
+        const nextTs = row?.calculated_at
+          ? new Date(row.calculated_at).getTime()
+          : 0;
+
+        if (!existing || nextTs >= existingTs) {
           publishedMap.set(normalizedLabel, row);
         }
       });
 
-      scopedTermLabels.forEach((label) => {
+      RESULT_TERMINAL_LABELS.forEach((label) => {
         const row = publishedMap.get(label);
         if (!row) return;
 
@@ -882,13 +992,24 @@ export const getResultByClassRoll = async (req, res) => {
             : null,
         };
       });
+
+      // If annual publish row is absent, reuse Third metadata for annual view.
+      if (!publishedMap.has("Annual")) {
+        const thirdRow = publishedMap.get("Third");
+        if (thirdRow) {
+          summaryByColumn.Annual = {
+            ...summaryByColumn.Annual,
+            rank: thirdRow.rank ?? null,
+            status: thirdRow.status || summaryByColumn.Annual.status,
+            published_date: thirdRow.calculated_at
+              ? new Date(thirdRow.calculated_at).toISOString().split("T")[0]
+              : null,
+          };
+        }
+      }
     }
 
-    const selectedSummaryLabel =
-      requestedTerminal === "Annual" ? "Annual" : requestedScopeTerminal;
-    const selectedSummary = summaryByColumn[selectedSummaryLabel];
-
-    const buildScopedMetric = (selector) => {
+    const buildScopedMetric = (selector, scopedTermLabels) => {
       const metric = {};
       scopedTermLabels.forEach((label) => {
         const key = termLabelToKey[label];
@@ -897,38 +1018,102 @@ export const getResultByClassRoll = async (req, res) => {
       return metric;
     };
 
-    const summaryReport = {
-      total_marks: buildScopedMetric((row) => row.total_max_marks),
-      marks_obtained: buildScopedMetric((row) => row.total_obtained),
-      percentage: buildScopedMetric((row) => row.percentage),
-      division: buildScopedMetric((row) => row.division),
-      rank: buildScopedMetric((row) => row.rank),
-      published_date: buildScopedMetric((row) => row.published_date),
+    const buildScopedTermLabels = (terminalLabel) => {
+      if (terminalLabel === "First") return ["First"];
+      if (terminalLabel === "Second") return ["First", "Second"];
+      if (terminalLabel === "Annual") return ["First", "Second", "Third", "Annual"];
+      return ["First", "Second", "Third"];
     };
 
-    const terminals = scopedTermLabels.map((label) => ({
-      terminal: label,
-      summary: summaryByColumn[label],
-    }));
+    const buildMarksDetailsForTerminal = (terminalLabel) => {
+      const selectedMarksMap = terminalRowMap[terminalLabel] || new Map();
 
-    res.json({
-      student: {
-        id: student.id,
-        name: student.name,
-        father_name: student.father_name,
-        class: student.class,
-        roll_no: student.roll_no,
-        section: student.section,
-        academic_year: student.academic_year || requestedAcademicYearRaw,
-      },
-      terminal: requestedTerminalRaw,
-      resolved_terminal:
-        requestedTerminal === "Annual" ? resolvedTerminal : undefined,
-      marks: marksDetails,
-      summary: selectedSummary,
-      summary_report: summaryReport,
-      terminals,
+      return normalizedSubjects
+        .map((cs) => {
+          const subject = cs.subjects;
+          const subjectId = cs.subject_id || subject?.id;
+          if (!subject || !subjectId) return null;
+
+          const maxMarks = getSubjectMaxMarks(subject);
+          const row = selectedMarksMap.get(subjectId);
+          const external = parseMarkValue(row?.external_marks);
+          const internal = parseMarkValue(row?.internal_marks);
+          const subjectTotal = round2(external.numeric + internal.numeric);
+
+          return {
+            subject: subject.name,
+            code: subject.code,
+            max_marks: maxMarks,
+            external_marks: external.display,
+            internal_marks: internal.display,
+            total_obtained: subjectTotal > 0 ? subjectTotal : "AB",
+          };
+        })
+        .filter(Boolean);
+    };
+
+    const buildResponsePayloadForTerminal = (terminalLabel) => {
+      const scopedTermLabels = buildScopedTermLabels(terminalLabel);
+      const selectedSummaryLabel =
+        terminalLabel === "Annual" ? "Annual" : terminalLabel;
+
+      const summaryReport = {
+        total_marks: buildScopedMetric((row) => row.total_max_marks, scopedTermLabels),
+        marks_obtained: buildScopedMetric((row) => row.total_obtained, scopedTermLabels),
+        percentage: buildScopedMetric((row) => row.percentage, scopedTermLabels),
+        division: buildScopedMetric((row) => row.division, scopedTermLabels),
+        rank: buildScopedMetric((row) => row.rank, scopedTermLabels),
+        published_date: buildScopedMetric((row) => row.published_date, scopedTermLabels),
+      };
+
+      const terminals = scopedTermLabels.map((label) => ({
+        terminal: label,
+        summary: summaryByColumn[label],
+      }));
+
+      return {
+        student: {
+          id: student.id,
+          name: student.name,
+          father_name: student.father_name,
+          class: student.class,
+          roll_no: student.roll_no,
+          section: student.section,
+          academic_year: student.academic_year || requestedAcademicYearRaw || null,
+        },
+        terminal: terminalLabel,
+        resolved_terminal: terminalLabel === "Annual" ? terminalLabel : undefined,
+        marks: buildMarksDetailsForTerminal(terminalLabel),
+        summary: summaryByColumn[selectedSummaryLabel],
+        summary_report: summaryReport,
+        terminals,
+      };
+    };
+
+    RESULT_TERMINAL_LABELS.forEach((terminalLabel) => {
+      const cacheKey = buildResultCacheKeyForTerminal(terminalLabel);
+      const payload = buildResponsePayloadForTerminal(terminalLabel);
+      setCachedReadResponse(cacheKey, payload, RESULT_BY_ROLL_CACHE_TTL_MS);
     });
+
+    const cachedOrBuiltPayload =
+      getCachedReadResponse(requestedResultCacheKey) ||
+      buildResponsePayloadForTerminal(requestedTerminal);
+
+    // Keep backward behavior for clients that depend on the exact query value.
+    const responsePayload = {
+      ...cachedOrBuiltPayload,
+      terminal: requestedTerminalRaw || cachedOrBuiltPayload.terminal,
+    };
+
+    setReadCacheHeaders({
+      res,
+      ttlMs: RESULT_BY_ROLL_CACHE_TTL_MS,
+      cacheHit: false,
+      visibility: "public",
+    });
+
+    return res.json(responsePayload);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Internal server error" });
@@ -1148,6 +1333,8 @@ export const submitMarks = async (req, res) => {
       }
     }
 
+    invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
+
     res.json({
       success: true,
       message: `Marks submitted successfully. ${markRecords.length} new mark(s) added.`,
@@ -1335,6 +1522,8 @@ export const editMarks = async (req, res) => {
         note: "Use POST /api/marks/submit to add new marks.",
       });
     }
+
+    invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
 
     res.json({
       success: true,
@@ -1622,6 +1811,8 @@ export const publishResult = async (req, res) => {
       }
     }
 
+    invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
+
     res.json({
       success: true,
       message: `Results published for ${publishedResults.length} student(s)`,
@@ -1650,11 +1841,33 @@ export const publishResult = async (req, res) => {
 export const getMarks = async (req, res) => {
   try {
     const { class: className, section, terminal } = req.query;
+    const requestedTerminalRaw = String(terminal || "").trim();
 
-    if (!className || !terminal) {
+    if (!className || !requestedTerminalRaw) {
       return res.status(400).json({
         message: "class and terminal are required",
       });
+    }
+
+    const requestedTerminal =
+      normalizeResultTerminalLabel(requestedTerminalRaw) || requestedTerminalRaw;
+    const marksCacheBaseKey = buildReadCacheKey("marksByClass", {
+      class: className,
+      section,
+    });
+    const buildMarksCacheKeyForTerminal = (terminalLabel) =>
+      `${marksCacheBaseKey}&terminal=${terminalLabel}`;
+    const marksCacheKey = buildMarksCacheKeyForTerminal(requestedTerminal);
+
+    const cachedMarksPayload = getCachedReadResponse(marksCacheKey);
+    if (cachedMarksPayload) {
+      setReadCacheHeaders({
+        res,
+        ttlMs: MARKS_BY_CLASS_CACHE_TTL_MS,
+        cacheHit: true,
+        visibility: "private",
+      });
+      return res.json(cachedMarksPayload);
     }
 
     // Get all students in class (and section if provided)
@@ -1698,13 +1911,19 @@ export const getMarks = async (req, res) => {
 
     const subjectIds = classSubjects.map((cs) => cs.subject_id);
     const studentIds = students.map((s) => s.id);
+    const fetchAllKnownTerminals = Boolean(
+      normalizeResultTerminalLabel(requestedTerminalRaw)
+    );
+    const terminalsToFetch = fetchAllKnownTerminals
+      ? RESULT_TERMINAL_LABELS
+      : [requestedTerminal];
 
     // Get all marks for these students
     const { data: marksData, error: marksError } = await supabase
       .from("marks")
       .select("*")
       .in("student_id", studentIds)
-      .eq("terminal", terminal)
+      .in("terminal", terminalsToFetch)
       .in("subject_id", subjectIds);
 
     if (marksError) {
@@ -1714,53 +1933,92 @@ export const getMarks = async (req, res) => {
       });
     }
 
-    // Organize marks by student
-    const marksByStudent = {};
+    // Organize marks by terminal then by student
+    const marksByTerminalAndStudent = {};
     marksData?.forEach((m) => {
-      if (!marksByStudent[m.student_id]) {
-        marksByStudent[m.student_id] = {};
+      const terminalLabel =
+        normalizeResultTerminalLabel(m.terminal) || String(m.terminal || "").trim();
+      if (!terminalLabel) return;
+
+      if (!marksByTerminalAndStudent[terminalLabel]) {
+        marksByTerminalAndStudent[terminalLabel] = {};
       }
-      marksByStudent[m.student_id][m.subject_id] = {
+
+      if (!marksByTerminalAndStudent[terminalLabel][m.student_id]) {
+        marksByTerminalAndStudent[terminalLabel][m.student_id] = {};
+      }
+      marksByTerminalAndStudent[terminalLabel][m.student_id][m.subject_id] = {
         external_marks: m.external_marks,
         internal_marks: m.internal_marks,
         status: m.status,
       };
     });
 
-    // Build response
-    const studentsWithMarks = students.map((student) => {
-      const studentMarks = marksByStudent[student.id] || {};
-      const marks = classSubjects.map((cs) => {
-        const subject = cs.subjects;
-        const mark = studentMarks[subject.id];
+    const buildTerminalPayload = (terminalLabel) => {
+      const marksByStudent = marksByTerminalAndStudent[terminalLabel] || {};
+
+      const studentsWithMarks = students.map((student) => {
+        const studentMarks = marksByStudent[student.id] || {};
+        const marks = classSubjects.map((cs) => {
+          const subject = cs.subjects;
+          const mark = studentMarks[subject.id];
+          return {
+            subject_id: subject.id,
+            subject_name: subject.name,
+            subject_code: subject.code,
+            external_marks: mark?.external_marks || null,
+            internal_marks: mark?.internal_marks || null,
+            status: mark?.status || "PENDING",
+          };
+        });
+
         return {
-          subject_id: subject.id,
-          subject_name: subject.name,
-          subject_code: subject.code,
-          external_marks: mark?.external_marks || null,
-          internal_marks: mark?.internal_marks || null,
-          status: mark?.status || "PENDING",
+          student_id: student.id,
+          name: student.name,
+          class: student.class,
+          section: student.section,
+          roll_no: student.roll_no,
+          marks,
         };
       });
 
       return {
-        student_id: student.id,
-        name: student.name,
-        class: student.class,
-        section: student.section,
-        roll_no: student.roll_no,
-        marks,
+        success: true,
+        class: className,
+        section: section || "All",
+        terminal: terminalLabel,
+        students: studentsWithMarks,
+        count: studentsWithMarks.length,
       };
+    };
+
+    const terminalsToCache = fetchAllKnownTerminals
+      ? RESULT_TERMINAL_LABELS
+      : [requestedTerminal];
+
+    terminalsToCache.forEach((terminalLabel) => {
+      const payload = buildTerminalPayload(terminalLabel);
+      const cacheKey = buildMarksCacheKeyForTerminal(terminalLabel);
+      setCachedReadResponse(cacheKey, payload, MARKS_BY_CLASS_CACHE_TTL_MS);
     });
 
-    res.json({
-      success: true,
-      class: className,
-      section: section || "All",
-      terminal,
-      students: studentsWithMarks,
-      count: studentsWithMarks.length,
+    const cachedOrBuiltPayload =
+      getCachedReadResponse(marksCacheKey) || buildTerminalPayload(requestedTerminal);
+
+    // Keep backward behavior for clients that depend on the exact query value.
+    const responsePayload = {
+      ...cachedOrBuiltPayload,
+      terminal: requestedTerminalRaw || cachedOrBuiltPayload.terminal,
+    };
+
+    setReadCacheHeaders({
+      res,
+      ttlMs: MARKS_BY_CLASS_CACHE_TTL_MS,
+      cacheHit: false,
+      visibility: "private",
     });
+
+    return res.json(responsePayload);
   } catch (err) {
     console.error("Get marks error:", err);
     res.status(500).json({ 
