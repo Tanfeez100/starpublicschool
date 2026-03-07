@@ -23,104 +23,98 @@ export const getBillsDownloadData = async (req, res) => {
     const { month, class: className } = req.query;
 
     if (!month) {
-      return res.status(400).json({
-        message: "Month is required (YYYY-MM)",
-      });
+      return res.status(400).json({ message: "Month is required (YYYY-MM)" });
     }
 
     if (!/^\d{4}-\d{2}$/.test(month)) {
-      return res.status(400).json({
-        message: "Invalid month format. Use YYYY-MM",
-      });
+      return res.status(400).json({ message: "Invalid month format. Use YYYY-MM" });
     }
 
-    // 🔎 Fetch Bills + Student (include receipt_number and student details)
-    let query = supabase
-      .from("fee_bills")
-      .select(`
-        id,
-        student_id,
-        month,
-        total_amount,
-        net_payable,
-        bill_status,
-        receipt_number,
-        students (
-          id,
-          name,
-          father_name,
-          section,
-          roll_no,
-          class,
-          uses_transport,
-          transport_charge
-        )
-      `)
-      .eq("month", month);
+    // ✅ STEP 1: Fetch ONLY active student IDs (exclude inactive/left students)
+    let studentQuery = supabaseAdmin
+      .from("students")
+      .select("id, name, father_name, section, roll_no, class, uses_transport, transport_charge, status")
+      .eq("status", "active"); // Only active students
 
     if (className) {
-      query = query.eq("students.class", className);
+      studentQuery = studentQuery.eq("class", className);
     }
 
-    const { data: bills, error } = await query;
+    const { data: activeStudents, error: studentError } = await studentQuery;
 
-    if (error) {
+    if (studentError) {
       return res.status(500).json({
-        message: "Failed to fetch bills",
-        error: error.message,
+        message: "Failed to fetch active students",
+        error: studentError.message,
       });
+    }
+
+    if (!activeStudents?.length) {
+      const msg = className
+        ? `No active students found in class ${className}. All students may have left.`
+        : "No active students found.";
+      return res.status(404).json({ message: msg, month, class: className || "All", totalBills: 0, bills: [] });
+    }
+
+    const activeStudentIds = activeStudents.map(s => s.id);
+
+    // Build a quick lookup map for student details
+    const studentMap = {};
+    activeStudents.forEach(s => { studentMap[s.id] = s; });
+
+    // ✅ STEP 2: Fetch bills ONLY for active students
+    const { data: bills, error: billError } = await supabaseAdmin
+      .from("fee_bills")
+      .select("id, student_id, month, total_amount, net_payable, bill_status, receipt_number")
+      .eq("month", month)
+      .in("student_id", activeStudentIds); // Only bills for active students
+
+    if (billError) {
+      return res.status(500).json({ message: "Failed to fetch bills", error: billError.message });
     }
 
     if (!bills?.length) {
-      return res.status(404).json({
-        message: "No bills found for this month",
-      });
+      const msg = className
+        ? `No bills found for class ${className} in ${month}.`
+        : `No bills found for ${month}.`;
+      return res.status(404).json({ message: msg, month, class: className || "All", totalBills: 0, bills: [] });
     }
 
+    // ✅ STEP 3: Format each bill safely
     const formattedBills = [];
 
     for (const bill of bills) {
+      // Get student data from our map (guaranteed active)
+      const student = studentMap[bill.student_id];
+
+      // Skip if student not found in active map (safety check)
+      if (!student) {
+        console.log(`Skipping bill ${bill.id} - student ${bill.student_id} not in active list`);
+        continue;
+      }
 
       // 📦 Bill Items
-      const { data: items } = await supabase
+      const { data: items } = await supabaseAdmin
         .from("fee_bill_items")
         .select("fee_name, amount")
         .eq("bill_id", bill.id);
 
-      // 💰 Advance Used For This Bill (if any)
-      // Query from advance_ledger where this bill was the target
-      const { data: advanceUsedRows } = await supabase
+      // 💰 Advance Used For This Bill
+      const { data: advanceUsedRows } = await supabaseAdmin
         .from("advance_ledger")
         .select("amount")
         .eq("used_for_bill_id", bill.id)
         .in("status", ["used"]);
 
-      const advanceUsed =
-        advanceUsedRows?.reduce(
-          (sum, a) => sum + parseFloat(a.amount || 0),
-          0
-        ) || 0;
+      const advanceUsed = advanceUsedRows?.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0) || 0;
 
-      // 🚍 Ensure transport is shown even if not inserted as item
+      // 🚍 Transport fee check
       let finalItems = items || [];
+      const hasTransportItem = finalItems.some(i => (i.fee_name || "").toLowerCase().includes("transport"));
 
-      const hasTransportItem = finalItems.some(i =>
-        i.fee_name.toLowerCase().includes("transport")
-      );
-
-      if (
-        bill.students.uses_transport &&
-        bill.students.transport_charge &&
-        !hasTransportItem
-      ) {
-        finalItems.push({
-          fee_name: "Transport Fee",
-          amount: bill.students.transport_charge,
-        });
+      if (student.uses_transport && student.transport_charge && !hasTransportItem) {
+        finalItems.push({ fee_name: "Transport Fee", amount: student.transport_charge });
       }
-
-      // Use student data included in the query (contains father_name & section)
-      const student = bill.students || {};
 
       formattedBills.push({
         bill_id: bill.id,
@@ -138,11 +132,18 @@ export const getBillsDownloadData = async (req, res) => {
         summary: {
           total_amount: parseFloat(bill.total_amount || 0),
           advance_used: advanceUsed,
-          net_payable: Math.max(0, parseFloat(bill.total_amount || 0) - advanceUsed), // Recalculate net_payable
+          net_payable: Math.max(0, parseFloat(bill.total_amount || 0) - advanceUsed),
           status: bill.bill_status,
         },
         receipt_number: bill.receipt_number || null,
       });
+    }
+
+    if (!formattedBills.length) {
+      const msg = className
+        ? `No bills found for active students in class ${className} for ${month}.`
+        : `No bills found for active students in ${month}.`;
+      return res.status(404).json({ message: msg, month, class: className || "All", totalBills: 0, bills: [] });
     }
 
     return res.json({
@@ -154,10 +155,7 @@ export const getBillsDownloadData = async (req, res) => {
 
   } catch (error) {
     console.error("Download data error:", error);
-    return res.status(500).json({
-      message: "Failed to fetch download data",
-      error: error.message,
-    });
+    return res.status(500).json({ message: "Failed to fetch download data", error: error.message });
   }
 };
 
@@ -206,14 +204,15 @@ export const generateBillsForClass = async (req, res) => {
       return res.status(400).json({ message: `Month ${month} is closed` });
     }
 
-    // 👨‍🎓 Fetch students
+    // 👨‍🎓 Fetch ONLY ACTIVE students (exclude inactive/left students)
     const { data: students } = await supabaseAdmin
       .from("students")
       .select("id, uses_transport, transport_charge")
-      .eq("class", className);
+      .eq("class", className)
+      .eq("status", "active"); // ✅ Only active students
 
     if (!students?.length) {
-      return res.status(404).json({ message: "No students found" });
+      return res.status(404).json({ message: `No active students found in class ${className}. All students may have left.` });
     }
 
     // 💰 Fee structure
