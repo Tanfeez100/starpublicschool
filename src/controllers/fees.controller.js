@@ -172,12 +172,13 @@ export const getFeeList = async (req, res) => {
     }
 
     /* ===============================
-       2️⃣ FETCH STUDENTS
+       2️⃣ FETCH STUDENTS (ONLY ACTIVE)
     =============================== */
 
     let studentQuery = supabase
       .from("students")
-      .select("id, name, father_name, roll_no, class, section");
+      .select("id, name, father_name, roll_no, class, section")
+      .eq("status", "active"); // ✅ Only active students
 
     if (className) studentQuery = studentQuery.eq("class", className);
     if (section) studentQuery = studentQuery.eq("section", section);
@@ -237,10 +238,59 @@ export const getFeeList = async (req, res) => {
       });
     }
 
-    const billIds = bills.map((b) => b.id);
+    /* ===============================
+       4️⃣ VERIFY STUDENT STATUS FIRST (CRITICAL - FILTER INACTIVE)
+    =============================== */
+    // ✅ CRITICAL: Fetch current student statuses to filter out inactive students
+    const billStudentIds = [...new Set((bills || []).map(b => b.student_id))];
+    
+    const { data: currentStudents, error: statusErr } = await supabase
+      .from("students")
+      .select("id, status")
+      .in("id", billStudentIds);
+
+    if (statusErr) {
+      console.error("Failed to verify student status:", statusErr);
+      return res.status(500).json({
+        message: "Failed to verify student status",
+        error: statusErr.message,
+      });
+    }
+
+    // Create active student map - ONLY include students with status = "active"
+    const activeStudentMap = {};
+    (currentStudents || []).forEach(s => {
+      if (s.status === "active") {
+        activeStudentMap[s.id] = true;
+      }
+    });
+
+    // ✅ CRITICAL: Filter bills - only include bills for ACTIVE students
+    const activeBills = (bills || []).filter(bill => {
+      const isActive = activeStudentMap[bill.student_id] === true;
+      if (!isActive) {
+        console.log(`Filtering out bill ${bill.id} - Student ${bill.student_id} is inactive`);
+      }
+      return isActive;
+    });
+
+    if (!activeBills || activeBills.length === 0) {
+      return res.json({
+        message: "No bills found for active students",
+        data: [],
+        count: 0,
+      });
+    }
+
+    const activeBillIds = activeBills.map((b) => b.id);
+
+    const billsByStudent = {};
+    activeBills.forEach((b) => {
+      billsByStudent[b.student_id] = b;
+    });
 
     /* ===============================
-       4️⃣ FETCH BILL ITEMS + PAYMENTS
+       5️⃣ FETCH BILL ITEMS + PAYMENTS (ONLY FOR ACTIVE BILLS)
     =============================== */
 
     const [
@@ -250,12 +300,12 @@ export const getFeeList = async (req, res) => {
       supabase
         .from("fee_bill_items")
         .select("bill_id, fee_name, amount")
-        .in("bill_id", billIds),
+        .in("bill_id", activeBillIds), // ✅ Only fetch items for active bills
 
       supabase
         .from("fee_payments")
         .select("bill_id, amount_paid")
-        .in("bill_id", billIds),
+        .in("bill_id", activeBillIds), // ✅ Only fetch payments for active bills
     ]);
 
     if (itemErr || payErr) {
@@ -266,7 +316,7 @@ export const getFeeList = async (req, res) => {
     }
 
     /* ===============================
-       5️⃣ MAP DATA CLEANLY
+       6️⃣ MAP DATA CLEANLY
     =============================== */
 
     const itemsByBill = {};
@@ -281,19 +331,20 @@ export const getFeeList = async (req, res) => {
         (paidByBill[p.bill_id] || 0) + parseFloat(p.amount_paid || 0);
     });
 
-    const billsByStudent = {};
-    bills.forEach((b) => {
-      billsByStudent[b.student_id] = b;
-    });
-
     /* ===============================
-       6️⃣ FINAL RESPONSE BUILD
+       6️⃣ FINAL RESPONSE BUILD (ONLY ACTIVE STUDENTS)
     =============================== */
 
-    const result = students.map((student) => {
-      const bill = billsByStudent[student.id];
+    const result = students
+      .filter(student => {
+        // ✅ CRITICAL: Only include if student has an active bill
+        // This ensures we only show students who are active AND have bills
+        return billsByStudent[student.id] !== undefined;
+      })
+      .map((student) => {
+        const bill = billsByStudent[student.id];
 
-      if (!bill) return null; // month filter case
+        if (!bill) return null; // month filter case
 
       const items = itemsByBill[bill.id] || [];
       const totalPaid = paidByBill[bill.id] || 0;
