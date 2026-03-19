@@ -98,6 +98,7 @@ const MAX_READ_CACHE_ITEMS = toPositiveInt(
   300
 );
 const RESULT_TERMINAL_LABELS = ["First", "Second", "Third", "Annual"];
+const RESULT_BY_ROLL_RESPONSE_VERSION = "v2";
 
 const readResponseCache = new Map();
 
@@ -553,6 +554,7 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
         id: student.id,
         name: student.name,
         father_name: student.father_name,
+        mother_name: student.mother_name || null,
         class: student.class,
         roll_no: student.roll_no,
         section: student.section,
@@ -668,6 +670,7 @@ export const getResultByClassRoll = async (req, res) => {
     }
 
     const resultCacheBaseKey = buildReadCacheKey("resultByRoll", {
+      version: RESULT_BY_ROLL_RESPONSE_VERSION,
       class: cls,
       roll,
       section,
@@ -1076,6 +1079,7 @@ export const getResultByClassRoll = async (req, res) => {
           id: student.id,
           name: student.name,
           father_name: student.father_name,
+          mother_name: student.mother_name || null,
           class: student.class,
           roll_no: student.roll_no,
           section: student.section,

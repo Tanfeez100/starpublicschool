@@ -284,7 +284,7 @@ const fetchStudentByClassRoll = async ({
   const runQuery = async (rollValue) => {
     let query = supabase
       .from("students")
-      .select("id, name, father_name, class, section, roll_no, academic_year")
+      .select("id, name, father_name, mother_name, class, section, roll_no, academic_year")
       .eq("class", className)
       .eq("roll_no", rollValue)
       .limit(5);
@@ -533,6 +533,7 @@ export const getResult = async (req, res) => {
       id: student.id,
       name: student.name,
       fatherName: student.father_name || null,
+      motherName: student.mother_name || null,
       class: student.class,
       section: student.section || null,
       rollNumber: student.roll_no,
@@ -560,6 +561,7 @@ export const getResult = async (req, res) => {
         id: studentDetails.id,
         name: studentDetails.name,
         father_name: student.father_name || null,
+        mother_name: student.mother_name || null,
         class: studentDetails.class,
         section: studentDetails.section,
         roll_no: studentDetails.rollNumber,
