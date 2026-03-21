@@ -1,19 +1,36 @@
 import express from "express";
 import cors from "cors";
-import resultRoutes from "./routes/result.routes.js";
-import marksRoutes from "./routes/marks.routes.js";
-import studentsRoutes from "./routes/students.routes.js";
-import invoiceRoutes from "./routes/invoice.routes.js";
-import feeRoutes from "./routes/fee.routes.js";
+import megaRoutes from "./routes/mega.routes.js";
+
 const app = express();
+
+// ⚡ OPTIMIZATION: Set timeout for all requests to 40 seconds (includes Supabase 30s timeout)
+app.use((req, res, next) => {
+  req.setTimeout(40000);
+  res.setTimeout(40000);
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
 
+// Mega routes (if needed)
+app.use("/api/mega", megaRoutes);
 
-app.use("/api/results", resultRoutes);
-app.use("/api/marks", marksRoutes);
-app.use("/api/students", studentsRoutes);
-app.use("/api", invoiceRoutes);
-app.use("/api/fees", feeRoutes);
+// ⚡ OPTIMIZATION: Global error handler for graceful timeout errors
+app.use((err, req, res, next) => {
+  if (err.code === 'ECONNABORTED' || err.code === 'ESOCKETTIMEDOUT') {
+    return res.status(503).json({
+      message: "Request timeout. Please try again.",
+      error: "REQUEST_TIMEOUT"
+    });
+  }
+  
+  console.error("Unhandled error:", err);
+  res.status(500).json({
+    message: "Internal server error",
+    error: err.message
+  });
+});
 
 export default app;

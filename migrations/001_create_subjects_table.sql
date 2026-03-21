@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS result_summary (
   total_obtained DECIMAL(7,2),
   percentage DECIMAL(5,2),
   division VARCHAR(20),
+  rank INT,
   status VARCHAR(20),
   calculated_at TIMESTAMP DEFAULT now(),
   

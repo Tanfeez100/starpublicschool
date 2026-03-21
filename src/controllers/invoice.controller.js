@@ -1,119 +1,106 @@
 import { supabase } from "../services/supabase.js";
+import { generateInvoicePDF } from "../services/pdfGenerator.js";
 
 /**
- * Fetch invoice by fee id (CLEAN + COMPLETE)
+ * Download invoice as PDF
+ * GET /api/invoice/download/:bill_id
  */
-export const getInvoiceById = async (req, res) => {
+export const downloadInvoice = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { bill_id } = req.params;
 
-    const { data: fee, error } = await supabase
-      .from("fees")
-      .select(`
-        id,
-        month,
-        tuition_fee,
-        previous_due,
-        fine,
-        exam_fee,
-        annual_fee,
-        advance,
-        total_fee,
-        paid_amount,
-        status,
-        breakdown,
-        created_at,
+    if (!bill_id) {
+      return res.status(400).json({
+        message: "bill_id is required",
+      });
+    }
+
+    // Get bill with student details
+    const { data: bill, error: billError } = await supabase
+      .from("fee_bills")
+      .select(
+        `
+        *,
         students (
           id,
           name,
           father_name,
+          roll_no,
           class,
-          section,
-          roll_no
+          section
         )
-      `)
-      .eq("id", id)
+      `
+      )
+      .eq("id", bill_id)
       .single();
 
-    if (error || !fee) {
-      return res.status(404).json({ message: "Invoice not found" });
+    if (billError || !bill) {
+      return res.status(404).json({ message: 'Bill not found' });
     }
 
-    const totalFee = Number(fee.total_fee || 0);
-    const paidAmount = Number(fee.paid_amount || 0);
+    // Get bill items
+    const { data: billItems, error: itemsError } = await supabase
+      .from("fee_bill_items")
+      .select("*")
+      .eq("bill_id", bill_id)
+      .order("created_at", { ascending: true });
 
-    res.json({
-      id: fee.id,
-      month: fee.month,
-      student: fee.students,
-      breakdown: fee.breakdown || {
-        "Current Month Fee": Number(fee.tuition_fee || 0),
-        "Previous Due": Number(fee.previous_due || 0),
-        "Fine": Number(fee.fine || 0),
-        "Exam Fee": Number(fee.exam_fee || 0),
-        "Annual Fee": Number(fee.annual_fee || 0),
-      },
-      totalFee,
-      paidAmount,
-      balance: Math.max(0, totalFee - paidAmount),
-      advance: Number(fee.advance || 0),
-      status: fee.status,
-      createdAt: fee.created_at,
+    if (itemsError) {
+      return res.status(500).json({
+        message: "Failed to fetch bill items",
+        error: itemsError.message,
+      });
+    }
+
+    // Get payments
+    const { data: payments, error: paymentsError } = await supabase
+      .from("fee_payments")
+      .select("*")
+      .eq("bill_id", bill_id)
+      .order("payment_date", { ascending: false });
+
+    if (paymentsError) {
+      return res.status(500).json({
+        message: "Failed to fetch payments",
+        error: paymentsError.message,
+      });
+    }
+
+    const totalPaid = payments?.reduce((sum, p) => sum + (p.amount_paid || 0), 0) || 0;
+    const remaining = Math.max(0, parseFloat(bill.total_amount || 0) - parseFloat(totalPaid || 0));
+
+    // Prepare invoice data
+    const invoiceData = {
+      invoice_number: `INV-${bill.id.substring(0, 8).toUpperCase()}`,
+      date: bill.created_at,
+      month: bill.month,
+      student: bill.students,
+      items: billItems || [],
+      payments: payments || [],
+      total_amount: bill.total_amount,
+      total_paid: totalPaid,
+      remaining: remaining,
+      status: bill.bill_status,
+    };
+
+    // Generate PDF
+    const pdfBuffer = await generateInvoicePDF(invoiceData);
+
+    // Set response headers
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="invoice-${invoiceData.invoice_number}-${bill.students?.name || "student"}.pdf"`
+    );
+
+    // Send PDF
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error("Error downloading invoice:", error);
+    res.status(500).json({
+      message: "Failed to generate invoice PDF",
+      error: error.message,
     });
-  } catch (err) {
-    console.error("❌ INVOICE FETCH ERROR:", err);
-    res.status(500).json({ message: err.message });
   }
 };
 
-/**
- * Raw SQL version (optional, consistent response)
- */
-export const getInvoiceByIdSQL = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { data, error } = await supabase.rpc("exec_sql", {
-      sql: `
-        SELECT 
-          f.*,
-          s.name,
-          s.father_name,
-          s.class,
-          s.section,
-          s.roll_no
-        FROM fees f
-        JOIN students s ON f.student_id = s.id
-        WHERE f.id = $1
-      `,
-      params: [id],
-    });
-
-    if (error || !data?.length) {
-      return res.status(404).json({ message: "Invoice not found" });
-    }
-
-    const fee = data[0];
-
-    res.json({
-      id: fee.id,
-      month: fee.month,
-      student: {
-        name: fee.name,
-        father_name: fee.father_name,
-        class: fee.class,
-        section: fee.section,
-        roll_no: fee.roll_no,
-      },
-      breakdown: fee.breakdown || {},
-      totalFee: Number(fee.total_fee || 0),
-      paidAmount: Number(fee.paid_amount || 0),
-      balance: Math.max(0, Number(fee.total_fee || 0) - Number(fee.paid_amount || 0)),
-      advance: Number(fee.advance || 0),
-      status: fee.status,
-    });
-  } catch (err) {
-    console.error("❌ SQL INVOICE ERROR:", err);
-    res.status(500).json({ message: err.message });
-  }
-};

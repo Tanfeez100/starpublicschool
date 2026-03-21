@@ -49,8 +49,8 @@ router.get("/class/:class", adminOrTeacher, getClassSubjects);
 
 /**
  * POST /api/subjects/add
- * Add an existing subject to a class and section
- * Body: { class: "1", subject_name: "Hindi" OR subject_code: "HND", section: "A", sequence: 1 (optional) }
+ * Add an existing subject to a class
+ * Body: { class: "1", subject_name: "Hindi" OR subject_code: "HND", sequence: 1 (optional) }
  * Subject must already exist in subjects table (created via POST /api/subjects)
  * Access: Admin Only
  */

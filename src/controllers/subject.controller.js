@@ -325,16 +325,17 @@ export const getClassSubjects = async (req, res) => {
 /**
  * Add subject to a class
  * Only accepts existing subjects from subjects table (created via POST /api/subjects)
- * Body: { class, subject_name OR subject_code, sequence, section }
+ * Body: { class, subject_name OR subject_code, sequence }
  */
 export const addSubjectToClass = async (req, res) => {
   try {
-    const { class: className, subject_name, subject_code, sequence, section } = req.body;
+    const { class: classNameRaw, subject_name, subject_code, sequence } = req.body;
+    const className = classNameRaw?.trim();
 
     // Validation
-    if (!className || !section) {
+    if (!className) {
       return res.status(400).json({ 
-        message: "Class and section are required" 
+        message: "Class is required" 
       });
     }
 
@@ -375,15 +376,13 @@ export const addSubjectToClass = async (req, res) => {
 
     const subject_id = subject.id;
 
-    // Check if subject already exists for this class and section
-    // Section column will be added via migration 004_add_section_to_class_subjects.sql
-    const { data: existing, error: checkError } = await supabase
+    // Check if subject already exists for this class
+    const { data: existingRows, error: checkError } = await supabase
       .from("class_subjects")
       .select("id")
       .eq("class", className)
       .eq("subject_id", subject_id)
-      .eq("section", section)
-      .maybeSingle();
+      .limit(1);
 
     if (checkError && checkError.code !== "PGRST116") {
       console.error("Check existing error:", checkError);
@@ -393,20 +392,19 @@ export const addSubjectToClass = async (req, res) => {
       });
     }
 
-    if (existing) {
+    if (existingRows && existingRows.length > 0) {
       return res.status(400).json({ 
-        message: `Subject "${subject.name}" is already assigned to class "${className}" section "${section}"` 
+        message: `Subject "${subject.name}" is already assigned to class "${className}"` 
       });
     }
 
-    // Get max sequence for this class and section
+    // Get max sequence for this class
     let maxSequence = 0;
     if (sequence === undefined || sequence === null) {
       const { data: lastSubject } = await supabase
         .from("class_subjects")
         .select("sequence")
         .eq("class", className)
-        .eq("section", section)
         .order("sequence", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -416,8 +414,7 @@ export const addSubjectToClass = async (req, res) => {
       maxSequence = Number(sequence);
     }
 
-    // Insert subject to class with section
-    // Note: Section column must be added via migration 004_add_section_to_class_subjects.sql
+    // Insert subject to class
     const { data, error } = await supabase
       .from("class_subjects")
       .insert([
@@ -425,13 +422,11 @@ export const addSubjectToClass = async (req, res) => {
           class: className,
           subject_id: subject_id,
           sequence: maxSequence,
-          section: section,
         },
       ])
       .select(`
         id,
         class,
-        section,
         sequence,
         subjects (
           id,
@@ -445,19 +440,17 @@ export const addSubjectToClass = async (req, res) => {
       console.error("Add subject to class error:", error);
       return res.status(500).json({ 
         message: "Failed to add subject to class",
-        error: error.message,
-        note: "If error mentions 'section' column, please run migration: 004_add_section_to_class_subjects.sql"
+        error: error.message
       });
     }
 
-    // Success - existing subject added to class and section
+    // Success - existing subject added to class
     res.status(201).json({
       success: true,
-      message: `Subject "${subject.name}" (${subject.code}) added to class "${className}" section "${section}" successfully`,
+      message: `Subject "${subject.name}" (${subject.code}) added to class "${className}" successfully`,
       data: {
         id: data.id,
         class: data.class,
-        section: data.section,
         sequence: data.sequence,
         subject: data.subjects,
       },

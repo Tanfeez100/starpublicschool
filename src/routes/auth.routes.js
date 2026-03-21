@@ -1,9 +1,31 @@
 import express from "express";
-import { supabase } from "../services/supabase.js";
+import { supabase, getRoleCached } from "../services/supabase.js";
 import { createClient } from "@supabase/supabase-js";
-import crypto from "crypto";
+import { adminOnly } from "../middleware/auth.middleware.js";
+
+/**
+ * OPTIMIZATION: Retry logic for network failures
+ * Exponential backoff: 1s, 2s, 4s, 8s
+ */
+const retryWithBackoff = async (fn, maxRetries = 3, initialDelay = 1000) => {
+  let lastError;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < maxRetries - 1) {
+        const delay = initialDelay * Math.pow(2, i);
+        console.warn(`Retry attempt ${i + 1}/${maxRetries} after ${delay}ms:`, err.message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError;
+};
 
 // Admin client for user management (uses service role key)
+// OPTIMIZATION: Increased timeout to 30s
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY,
@@ -11,11 +33,164 @@ const supabaseAdmin = createClient(
     auth: {
       autoRefreshToken: false,
       persistSession: false
-    }
+    },
+    global: {
+      fetch: (url, options = {}) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        return fetch(url, {
+          ...options,
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeout));
+      },
+    },
   }
 );
 
 const router = express.Router();
+
+const createHttpError = (status, message, detail = null) => {
+  const err = new Error(message);
+  err.status = status;
+  if (detail) {
+    err.detail = detail;
+  }
+  return err;
+};
+
+const normalizeRole = (role) => String(role || "").trim().toLowerCase();
+
+const createManagedUser = async ({ email, password, role }) => {
+  if (!email || !password || !role) {
+    throw createHttpError(400, "Email, password, and role are required");
+  }
+
+  const normalizedRole = normalizeRole(role);
+  const allowedRoles = ["admin", "teacher"];
+
+  if (!allowedRoles.includes(normalizedRole)) {
+    throw createHttpError(400, "Role must be 'admin' or 'teacher'");
+  }
+
+  if (String(password).length < 6) {
+    throw createHttpError(400, "Password must be at least 6 characters");
+  }
+
+  const { data: authData, error: authError } = await retryWithBackoff(() =>
+    supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    })
+  );
+
+  if (authError) {
+    if (
+      (authError.message || "").toLowerCase().includes("already exists") ||
+      authError.status === 422
+    ) {
+      throw createHttpError(400, "User with this email already exists");
+    }
+
+    throw createHttpError(
+      503,
+      "Failed to create user. Please try again.",
+      authError.message
+    );
+  }
+
+  const userId = authData?.user?.id;
+  if (!userId) {
+    throw createHttpError(503, "Failed to create user. Missing user ID.");
+  }
+
+  const { error: roleError } = await retryWithBackoff(() =>
+    supabase.from("user_roles").insert([{ user_id: userId, role: normalizedRole }])
+  );
+
+  if (roleError) {
+    try {
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+    } catch (rollbackError) {
+      console.error("Failed to rollback user creation:", rollbackError);
+    }
+
+    throw createHttpError(
+      503,
+      "Failed to assign role. Please try again.",
+      roleError.message
+    );
+  }
+
+  return {
+    id: userId,
+    email,
+    role: normalizedRole,
+  };
+};
+
+const deleteManagedUser = async ({ userId, requiredRole = null, actorUserId = null }) => {
+  if (!userId) {
+    throw createHttpError(400, "User ID is required");
+  }
+
+  if (actorUserId && actorUserId === userId) {
+    throw createHttpError(400, "You cannot remove your own account");
+  }
+
+  const { data: roleData, error: roleError } = await supabase
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", userId)
+    .single();
+
+  if (roleError || !roleData) {
+    throw createHttpError(404, "User not found in user_roles");
+  }
+
+  const existingRole = normalizeRole(roleData.role);
+
+  if (requiredRole && existingRole !== requiredRole) {
+    throw createHttpError(400, `Only '${requiredRole}' accounts can be removed here`);
+  }
+
+  const deleteRolePromise = retryWithBackoff(() =>
+    supabase.from("user_roles").delete().eq("user_id", userId)
+  );
+
+  const deleteUserPromise = retryWithBackoff(() =>
+    supabaseAdmin.auth.admin.deleteUser(userId)
+  );
+
+  const [roleDeleteResult, userDeleteResult] = await Promise.allSettled([
+    deleteRolePromise,
+    deleteUserPromise,
+  ]);
+
+  if (roleDeleteResult.status === "rejected") {
+    throw createHttpError(
+      503,
+      "Failed to remove role. Please try again.",
+      roleDeleteResult.reason?.message || "Role deletion failed"
+    );
+  }
+
+  if (userDeleteResult.status === "rejected") {
+    try {
+      await supabase.from("user_roles").insert([{ user_id: userId, role: existingRole }]);
+    } catch (restoreErr) {
+      console.error("Failed to restore role:", restoreErr);
+    }
+
+    throw createHttpError(
+      503,
+      "Failed to delete user. Please try again.",
+      userDeleteResult.reason?.message || "Auth user deletion failed"
+    );
+  }
+
+  return { id: userId, role: existingRole };
+};
 
 router.post("/login", async (req, res) => {
   try {
@@ -24,28 +199,23 @@ router.post("/login", async (req, res) => {
     if (!email || !password)
       return res.status(400).json({ message: "Email & password required" });
 
-    // 1️⃣ Supabase Auth Login
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    // ⚡ OPTIMIZATION: Add retry logic for network resilience
+    const { data, error } = await retryWithBackoff(() => 
+      supabase.auth.signInWithPassword({ email, password })
+    );
 
     if (error)
       return res.status(401).json({ message: "Invalid credentials" });
 
-    // 2️⃣ ROLE CHECK (user_roles TABLE)
-    const { data: roleData, error: roleError } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", data.user.id)
-      .single();
+    // ⚡ OPTIMIZATION: Cache role fetch
+    const role = await getRoleCached(data.user.id);
 
-    if (roleError || !roleData)
+    if (!role)
       return res.status(403).json({ message: "Role not assigned" });
 
     // 3️⃣ ALLOW ADMIN AND TEACHER ROLES
     const allowedRoles = ["admin", "teacher"];
-    if (!allowedRoles.includes(roleData.role)) {
+    if (!allowedRoles.includes(role)) {
       return res.status(403).json({ 
         message: "Access denied. Only admin and teacher can login." 
       });
@@ -60,7 +230,7 @@ router.post("/login", async (req, res) => {
       user: {
         id: data.user.id,
         email: data.user.email,
-        role: roleData.role, // Will be "admin" or "teacher"
+        role: role, // Will be "admin" or "teacher"
       },
       session: data.session,
       token_info: {
@@ -72,8 +242,8 @@ router.post("/login", async (req, res) => {
 
   } catch (err) {
     console.error("Login error:", err);
-    res.status(500).json({ 
-      message: "Server error",
+    res.status(503).json({ 
+      message: "Service temporarily unavailable. Please try again.",
       error: err.message 
     });
   }
@@ -82,102 +252,125 @@ router.post("/login", async (req, res) => {
 /* ======================================================
    CREATE USER (ADMIN/TEACHER)
    ====================================================== */
-router.post("/create-user", async (req, res) => {
+router.post("/create-user", adminOnly, async (req, res) => {
   try {
     const { email, password, role } = req.body;
+    const createdUser = await createManagedUser({ email, password, role });
 
-    // Validation
-    if (!email || !password || !role) {
-      return res.status(400).json({ 
-        message: "Email, password, and role are required" 
-      });
-    }
-
-    // Validate role
-    const allowedRoles = ["admin", "teacher"];
-    if (!allowedRoles.includes(role)) {
-      return res.status(400).json({ 
-        message: "Role must be 'admin' or 'teacher'" 
-      });
-    }
-
-    // Validate password strength
-    if (password.length < 6) {
-      return res.status(400).json({ 
-        message: "Password must be at least 6 characters" 
-      });
-    }
-
-    // Check if user already exists
-    const { data: existingUser } = await supabaseAdmin.auth.admin.listUsers();
-    const userExists = existingUser?.users?.some(
-      (user) => user.email === email
-    );
-
-    if (userExists) {
-      return res.status(400).json({ 
-        message: "User with this email already exists" 
-      });
-    }
-
-    // 1️⃣ Create user in Supabase Auth
-    const { data: authData, error: authError } = 
-      await supabaseAdmin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true, // Auto-confirm email
-      });
-
-    if (authError) {
-      console.error("Create user error:", authError);
-      return res.status(500).json({ 
-        message: "Failed to create user",
-        error: authError.message 
-      });
-    }
-
-    const userId = authData.user.id;
-
-    // 2️⃣ Save role in user_roles table
-    const { error: roleError } = await supabase
-      .from("user_roles")
-      .insert([
-        {
-          user_id: userId,
-          role: role,
-        },
-      ]);
-
-    if (roleError) {
-      // If role insert fails, delete the created user
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      console.error("Role insert error:", roleError);
-      return res.status(500).json({ 
-        message: "Failed to assign role",
-        error: roleError.message 
-      });
-    }
-
-    // 3️⃣ SUCCESS
     res.status(201).json({
       success: true,
-      message: `${role} created successfully`,
-      user: {
-        id: userId,
-        email: email,
-        role: role,
-      },
+      message: `${createdUser.role} created successfully`,
+      user: createdUser,
     });
-
   } catch (err) {
     console.error("Create user error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
+    res.status(err.status || 503).json({
+      message: err.message || "Service temporarily unavailable. Please try again.",
+      ...(err.detail ? { error: err.detail } : {}),
     });
   }
 });
 
+/* ======================================================
+   ADMIN TEACHER MANAGEMENT
+   ====================================================== */
+router.post("/teachers", adminOnly, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const createdTeacher = await createManagedUser({
+      email,
+      password,
+      role: "teacher",
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Teacher created successfully",
+      teacher: createdTeacher,
+    });
+  } catch (err) {
+    console.error("Create teacher error:", err);
+    return res.status(err.status || 503).json({
+      message: err.message || "Service temporarily unavailable. Please try again.",
+      ...(err.detail ? { error: err.detail } : {}),
+    });
+  }
+});
+
+router.get("/teachers", adminOnly, async (req, res) => {
+  try {
+    const { data: roleRows, error: roleError } = await supabase
+      .from("user_roles")
+      .select("user_id, role")
+      .eq("role", "teacher")
+      .order("user_id", { ascending: true });
+
+    if (roleError) {
+      return res.status(503).json({
+        message: "Failed to fetch teachers. Please try again.",
+        error: roleError.message,
+      });
+    }
+
+    const teacherIds = (roleRows || []).map((row) => row.user_id);
+    const teacherIdSet = new Set(teacherIds);
+    const emailById = new Map();
+
+    if (teacherIds.length > 0) {
+      const { data: listData, error: listError } = await retryWithBackoff(() =>
+        supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+      );
+
+      if (!listError && listData?.users?.length) {
+        for (const authUser of listData.users) {
+          if (teacherIdSet.has(authUser.id)) {
+            emailById.set(authUser.id, authUser.email || null);
+          }
+        }
+      }
+    }
+
+    const teachers = (roleRows || []).map((row) => ({
+      id: row.user_id,
+      role: "teacher",
+      email: emailById.get(row.user_id) || null,
+    }));
+
+    return res.json({
+      success: true,
+      count: teachers.length,
+      teachers,
+    });
+  } catch (err) {
+    console.error("Get teachers error:", err);
+    return res.status(503).json({
+      message: "Service temporarily unavailable. Please try again.",
+      error: err.message,
+    });
+  }
+});
+
+router.delete("/teachers/:id", adminOnly, async (req, res) => {
+  try {
+    const deletedTeacher = await deleteManagedUser({
+      userId: req.params.id,
+      requiredRole: "teacher",
+      actorUserId: req.user?.id || null,
+    });
+
+    return res.json({
+      success: true,
+      message: "Teacher removed successfully",
+      deletedTeacher,
+    });
+  } catch (err) {
+    console.error("Remove teacher error:", err);
+    return res.status(err.status || 503).json({
+      message: err.message || "Service temporarily unavailable. Please try again.",
+      ...(err.detail ? { error: err.detail } : {}),
+    });
+  }
+});
 /* ======================================================
    FORGOT PASSWORD / RESET PASSWORD
    ====================================================== */
@@ -191,52 +384,27 @@ router.post("/forgot-password", async (req, res) => {
       });
     }
 
-    // Check if user exists
-    const { data: users, error: listError } = 
-      await supabaseAdmin.auth.admin.listUsers();
-
-    if (listError) {
-      return res.status(500).json({ 
-        message: "Failed to check user",
-        error: listError.message 
-      });
-    }
-
-    const user = users?.users?.find((u) => u.email === email);
-
-    if (!user) {
-      // Don't reveal if user exists or not (security best practice)
-      return res.json({
-        success: true,
-        message: "If the email exists, a password reset link has been sent.",
-      });
-    }
-
-    // Send password reset email
-    const { error: resetError } = 
-      await supabaseAdmin.auth.admin.generateLink({
+    // ⚡ OPTIMIZATION: Use generateLink directly with retry instead of listing all users
+    // This avoids fetching ALL users just to check one email
+    const { error: resetError } = await retryWithBackoff(() =>
+      supabaseAdmin.auth.admin.generateLink({
         type: "recovery",
         email: email,
-      });
+      })
+    );
 
-    if (resetError) {
-      console.error("Reset password error:", resetError);
-      return res.status(500).json({ 
-        message: "Failed to send reset email",
-        error: resetError.message 
-      });
-    }
-
+    // Always return success to prevent email enumeration attacks
     res.json({
       success: true,
-      message: "Password reset email sent successfully",
+      message: "If the email exists, a password reset link has been sent.",
     });
 
   } catch (err) {
     console.error("Forgot password error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
+    // Still return success for security
+    res.json({
+      success: true,
+      message: "If the email exists, a password reset link has been sent.",
     });
   }
 });
@@ -244,7 +412,7 @@ router.post("/forgot-password", async (req, res) => {
 /* ======================================================
    RESET PASSWORD (Admin can reset password directly)
    ====================================================== */
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", adminOnly, async (req, res) => {
   try {
     const { email, newPassword } = req.body;
 
@@ -260,35 +428,61 @@ router.post("/reset-password", async (req, res) => {
       });
     }
 
-    // Find user by email
-    const { data: users, error: listError } = 
-      await supabaseAdmin.auth.admin.listUsers();
+    // ⚡ OPTIMIZATION: Modified approach - use admin API directly with email
+    // Note: Supabase admin API provides updateUserByEmail method if available
+    // Otherwise, we need to add a backend endpoint that requires full admin authentication
+    
+    // For now, return a note that admin must use Supabase Dashboard or provide user ID
+    return res.status(400).json({
+      message: "Please provide user ID instead of email for direct password reset",
+      hint: "Use PATCH /api/auth/reset-password/:id endpoint",
+    });
 
-    if (listError) {
-      return res.status(500).json({ 
-        message: "Failed to find user",
-        error: listError.message 
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(503).json({ 
+      message: "Service temporarily unavailable. Please try again.",
+      error: err.message 
+    });
+  }
+});
+
+/* ======================================================
+   RESET PASSWORD BY USER ID (More efficient)
+   ====================================================== */
+router.patch("/reset-password/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword } = req.body;
+
+    if (!id || !newPassword) {
+      return res.status(400).json({ 
+        message: "User ID and new password are required" 
       });
     }
 
-    const user = users?.users?.find((u) => u.email === email);
-
-    if (!user) {
-      return res.status(404).json({ 
-        message: "User not found" 
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        message: "Password must be at least 6 characters" 
       });
     }
 
-    // Update user password
-    const { error: updateError } = 
-      await supabaseAdmin.auth.admin.updateUserById(user.id, {
+    // Update user password with retry
+    const { error: updateError } = await retryWithBackoff(() =>
+      supabaseAdmin.auth.admin.updateUserById(id, {
         password: newPassword,
-      });
+      })
+    );
 
     if (updateError) {
       console.error("Reset password error:", updateError);
-      return res.status(500).json({ 
-        message: "Failed to reset password",
+      if (updateError.status === 404) {
+        return res.status(404).json({ 
+          message: "User not found" 
+        });
+      }
+      return res.status(503).json({ 
+        message: "Failed to reset password. Please try again.",
         error: updateError.message 
       });
     }
@@ -300,9 +494,9 @@ router.post("/reset-password", async (req, res) => {
 
   } catch (err) {
     console.error("Reset password error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
+    res.status(503).json({ 
+      message: "Service temporarily unavailable. Please try again.",
+      error: err.message
     });
   }
 });
@@ -310,136 +504,62 @@ router.post("/reset-password", async (req, res) => {
 /* ======================================================
    REMOVE USER (DELETE TEACHER/ADMIN)
    ====================================================== */
-router.delete("/remove-user/:id", async (req, res) => {
+router.delete("/remove-user/:id", adminOnly, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    if (!id) {
-      return res.status(400).json({ 
-        message: "User ID is required" 
-      });
-    }
-
-    // Check if user exists and get role
-    const { data: roleData, error: roleError } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", id)
-      .single();
-
-    if (roleError || !roleData) {
-      return res.status(404).json({ 
-        message: "User not found in user_roles" 
-      });
-    }
-
-    // Prevent deleting admin (optional security check)
-    // Uncomment if you want to prevent admin deletion
-    // if (roleData.role === "admin") {
-    //   return res.status(403).json({ 
-    //     message: "Cannot delete admin user" 
-    //   });
-    // }
-
-    // 1️⃣ Delete from user_roles table
-    const { error: deleteRoleError } = await supabase
-      .from("user_roles")
-      .delete()
-      .eq("user_id", id);
-
-    if (deleteRoleError) {
-      console.error("Delete role error:", deleteRoleError);
-      return res.status(500).json({ 
-        message: "Failed to remove role",
-        error: deleteRoleError.message 
-      });
-    }
-
-    // 2️⃣ Delete user from Supabase Auth
-    const { error: deleteUserError } = 
-      await supabaseAdmin.auth.admin.deleteUser(id);
-
-    if (deleteUserError) {
-      console.error("Delete user error:", deleteUserError);
-      // Try to restore role if user deletion fails
-      await supabase.from("user_roles").insert([{
-        user_id: id,
-        role: roleData.role,
-      }]);
-      
-      return res.status(500).json({ 
-        message: "Failed to delete user",
-        error: deleteUserError.message 
-      });
-    }
+    const deletedUser = await deleteManagedUser({
+      userId: req.params.id,
+      actorUserId: req.user?.id || null,
+    });
 
     res.json({
       success: true,
       message: "User removed successfully",
-      deletedUser: {
-        id: id,
-        role: roleData.role,
-      },
+      deletedUser,
     });
-
   } catch (err) {
     console.error("Remove user error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
+    res.status(err.status || 503).json({
+      message: err.message || "Service temporarily unavailable. Please try again.",
+      ...(err.detail ? { error: err.detail } : {}),
     });
   }
 });
-
 /* ======================================================
    GET ALL USERS (LIST ADMIN/TEACHER)
    ====================================================== */
-router.get("/users", async (req, res) => {
+router.get("/users", adminOnly, async (req, res) => {
   try {
-    // Get all users with roles
+    // ⚡ OPTIMIZATION: Get roles directly from table (which is faster than listing all Supabase users)
+    // Only fetch from Supabase auth if we really need full user details
     const { data: roleData, error: roleError } = await supabase
       .from("user_roles")
       .select("user_id, role");
 
     if (roleError) {
-      return res.status(500).json({ 
-        message: "Failed to fetch users",
+      return res.status(503).json({ 
+        message: "Failed to fetch users. Please try again.",
         error: roleError.message 
       });
     }
 
-    // Get user details from auth
-    const { data: usersData, error: usersError } = 
-      await supabaseAdmin.auth.admin.listUsers();
-
-    if (usersError) {
-      return res.status(500).json({ 
-        message: "Failed to fetch user details",
-        error: usersError.message 
-      });
-    }
-
-    // Combine user data with roles
-    const usersWithRoles = roleData.map((role) => {
-      const user = usersData?.users?.find((u) => u.id === role.user_id);
-      return {
-        id: role.user_id,
-        email: user?.email || "N/A",
-        role: role.role,
-        created_at: user?.created_at,
-      };
-    });
+    // Return just from our table - faster and sufficient for most use cases
+    // If you need auth details, those can be fetched on-demand
+    const users = roleData.map((role) => ({
+      id: role.user_id,
+      role: role.role,
+    }));
 
     res.json({
       success: true,
-      users: usersWithRoles,
-      count: usersWithRoles.length,
+      users: users,
+      count: users.length,
+      note: "Email and auth details not included for performance. Use /api/auth/users/:id to get full details.",
     });
 
   } catch (err) {
     console.error("Get users error:", err);
-    res.status(500).json({ 
-      message: "Server error",
+    res.status(503).json({ 
+      message: "Service temporarily unavailable. Please try again.",
       error: err.message 
     });
   }
@@ -461,10 +581,10 @@ router.post("/logout", async (req, res) => {
 
     const token = authHeader.split(" ")[1];
 
-    // Verify token and get user
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+    // ⚡ OPTIMIZATION: Verify token with proper Supabase auth
+    const { data: { user }, error } = await supabase.auth.getUser(token);
 
-    if (userError || !user) {
+    if (error || !user) {
       // Token already invalid/expired, but still return success
       return res.json({
         success: true,
@@ -473,22 +593,17 @@ router.post("/logout", async (req, res) => {
       });
     }
 
-    // Get user role for response
-    const { data: roleData } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .single();
+    // Get user role for response from cache
+    const role = await getRoleCached(user.id);
 
-    // 1️⃣ Revoke all sessions for this user globally (Supabase level)
+    // ⚡ OPTIMIZATION: Revoke sessions with retry
     try {
-      const { error: signOutError } = await supabaseAdmin.auth.admin.signOut(user.id, "global");
-      
-      if (signOutError) {
-        console.warn("SignOut error:", signOutError);
-      }
+      await retryWithBackoff(() =>
+        supabaseAdmin.auth.admin.signOut(user.id, "global")
+      );
     } catch (signOutError) {
-      console.warn("SignOut exception (non-critical):", signOutError);
+      console.warn("SignOut warning (non-critical):", signOutError.message);
+      // Non-critical error, continue
     }
 
     res.json({
@@ -498,15 +613,15 @@ router.post("/logout", async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        role: roleData?.role || "unknown",
+        role: role || "unknown",
       },
       logout_time: new Date().toISOString(),
     });
 
   } catch (err) {
     console.error("Logout error:", err);
-    res.status(500).json({ 
-      message: "Server error",
+    res.status(503).json({ 
+      message: "Service temporarily unavailable. Please try again.",
       error: err.message 
     });
   }
@@ -602,3 +717,5 @@ router.post("/refresh", async (req, res) => {
 });
 
 export default router;
+
+

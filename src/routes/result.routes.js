@@ -1,7 +1,7 @@
 
 import express from "express";
-import { getResult } from "../controllers/result.controller.js";
+import { getResultByClassRoll } from "../controllers/marks.controller.js";
 
 const router = express.Router();
-router.get("/", getResult);
+router.get("/", getResultByClassRoll);
 export default router;
