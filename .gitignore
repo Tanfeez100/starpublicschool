@@ -10,3 +10,17 @@ package.json
 
 
 service-account.json
+
+      BATCH_MIGRATION_GUIDE.md
+        EXCEL_UPLOAD_API.md
+        batch_migrate_from_excel.js
+        check_db.js
+        check_db_v2.js
+        clear_migration_locks.js
+        migrations/008_create_migration_control_table.sql
+        migrations/009_create_migration_logs_table.sql
+        migrations/010_create_migration_function.sql
+        migrations/011_fix_previous_dues_schema.sql
+        migrations/012_rename_amount_to_remaining_dues.sql
+        run_migration_009.js
+        run_migration_010.js

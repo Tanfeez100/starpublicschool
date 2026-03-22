@@ -446,11 +446,11 @@ export const generateInvoicePDF = async (invoiceData) => {
         .fontSize(12)
         .font("Helvetica")
         .fillColor("#666666")
-        .text("School Management System", margin, 80)
-        .text("123 School Street", margin, 95)
-        .text("City, State - 123456", margin, 110)
-        .text("Phone: +91 1234567890", margin, 125)
-        .text("Email: info@school.com", margin, 140);
+        .text("Gyanoday Public School", margin, 80)
+        .text("Blaspur Dainmanwa Road, ", margin, 95)
+        .text("Harinagar (W. Champaran)- 845106", margin, 110)
+        .text("Phone: +91 9876543210, +91 9123456789", margin, 125)
+        .text("Email: gpschool2025@gmail.com", margin, 140);
 
       // Invoice Number and Date (Right aligned)
       doc
