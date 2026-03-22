@@ -348,7 +348,6 @@ export const getFeeList = async (req, res) => {
 
       const items = itemsByBill[bill.id] || [];
       const totalPaid = paidByBill[bill.id] || 0;
-      const totalFee = parseFloat(bill.total_amount || 0);
 
       const breakdown = {
         tuition_fee: 0,
@@ -371,6 +370,8 @@ export const getFeeList = async (req, res) => {
         else if (name.includes("previous")) breakdown.previous_due += amt;
       });
 
+      // Calculate total_fee from breakdown instead of bill.total_amount
+      const totalFee = breakdown.tuition_fee + breakdown.exam_fee + breakdown.annual_fee + breakdown.computer_fee + breakdown.transport_fee + breakdown.previous_due;
       const netPayable = Math.max(0, totalFee - totalPaid);
 
       return {

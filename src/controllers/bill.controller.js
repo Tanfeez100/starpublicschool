@@ -172,285 +172,293 @@ export const getBillsDownloadData = async (req, res) => {
  * Generate bills for all students in a class for a given month
  * POST /api/bills/generate
  * Body: { class: "Class Name", month: "YYYY-MM" }
+ * 
+ * options.migrationStudentData: Map<student_id, pending_due> - for migration month bills
  */
-export const generateBillsForClass = async (req, res) => {
-  try {
-    const {
-      class: className,
-      month,
-      include_exam_fee = false,
-      include_annual_fee = false,
-      include_computer_fee = false,
-    } = req.body;
+export const createBillsForClass = async (className, month, section = null, options = {}) => {
+  const {
+    include_exam_fee = true,
+    include_annual_fee = true,
+    include_computer_fee = true,
+    migrationStudentData = null, // Map of student_id -> pending_due for migration
+  } = options;
 
-    if (!className || !month) {
-      return res.status(400).json({ message: "class and month are required" });
-    }
+  if (!className || !month) {
+    throw new Error("class and month are required");
+  }
 
-    if (!/^\d{4}-\d{2}$/.test(month)) {
-      return res.status(400).json({ message: "Invalid month format. Use YYYY-MM" });
-    }
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    throw new Error("Invalid month format. Use YYYY-MM");
+  }
 
-    const year = parseInt(month.split("-")[0], 10);
+  const year = parseInt(month.split("-")[0], 10);
 
-    // 🔒 Prevent generation for closed month
-    const { data: closedRow } = await supabaseAdmin
-      .from("month_closures")
-      .select("id")
-      .eq("month", month)
-      .maybeSingle();
+  // 🔒 Prevent generation for closed month
+  const { data: closedRow } = await supabaseAdmin
+    .from("month_closures")
+    .select("id")
+    .eq("month", month)
+    .maybeSingle();
 
-    if (closedRow) {
-      return res.status(400).json({ message: `Month ${month} is closed` });
-    }
+  if (closedRow) {
+    throw new Error(`Month ${month} is closed`);
+  }
 
-    // 👨‍🎓 Fetch ONLY ACTIVE students (exclude inactive/left students)
-    const { data: students } = await supabaseAdmin
-      .from("students")
-      .select("id, uses_transport, transport_charge")
-      .eq("class", className)
-      .eq("status", "active"); // ✅ Only active students
+  // 👨‍🎓 Fetch ONLY ACTIVE students (exclude inactive/left students)
+  let studentQuery = supabaseAdmin
+    .from("students")
+    .select("id, uses_transport, transport_charge, section")
+    .eq("class", className)
+    .eq("status", "active");
 
-    if (!students?.length) {
-      return res.status(404).json({ message: `No active students found in class ${className}. All students may have left.` });
-    }
+  if (section) {
+    studentQuery = studentQuery.eq("section", section);
+  }
 
-    // 💰 Fee structure
-    const { data: feeRows } = await supabaseAdmin
-      .from("fee_structures")
-      .select("fee_name, fee_amount")
-      .eq("class", className);
+  const { data: students } = await studentQuery;
 
-    let tuition = 0,
-      exam = 0,
-      annual = 0,
-      computer = 0;
+  if (!students?.length) {
+    return { successCount: 0, errorCount: 0, message: `No active students found in class ${className}${section ? ' section ' + section : ''}.` };
+  }
 
-    feeRows?.forEach((r) => {
-      const name = (r.fee_name || "").toLowerCase();
-      const amt = parseFloat(r.fee_amount || 0);
+  // 💰 Fee structure
+  const { data: feeRows } = await supabaseAdmin
+    .from("fee_structures")
+    .select("fee_name, fee_amount")
+    .eq("class", className);
 
-      if (name.includes("tuition")) tuition += amt;
-      else if (name.includes("exam")) exam += amt;
-      else if (name.includes("annual")) annual += amt;
-      else if (name.includes("computer")) computer += amt;
-    });
+  let tuition = 0,
+    exam = 0,
+    annual = 0,
+    computer = 0;
 
-    const results = await Promise.all(
-      students.map(async (student) => {
-        try {
-          // 🔁 Get pending previous dues
-          const { data: duesRows } = await supabaseAdmin
+  feeRows?.forEach((r) => {
+    const name = (r.fee_name || "").toLowerCase();
+    const amt = parseFloat(r.fee_amount || 0);
+
+    if (name.includes("tuition")) tuition += amt;
+    else if (name.includes("exam")) exam += amt;
+    else if (name.includes("annual")) annual += amt;
+    else if (name.includes("computer")) computer += amt;
+  });
+
+  const results = await Promise.all(
+    students.map(async (student) => {
+      try {
+        let previousDue = 0;
+        let duesRows = [];
+
+        // ✅ During migration: Use migrationStudentData directly (don't query previous_dues)
+        if (migrationStudentData && migrationStudentData.has(student.id)) {
+          previousDue = migrationStudentData.get(student.id);
+        } else {
+          // Regular month: Query previous_dues table as normal
+          const { data: rows } = await supabaseAdmin
             .from("previous_dues")
             .select("id, remaining_due")
             .eq("student_id", student.id)
             .eq("status", "pending")
             .lt("month", month);
 
-          const previousDue =
-            duesRows?.reduce(
-              (sum, d) => sum + parseFloat(d.remaining_due || 0),
-              0
-            ) || 0;
+          duesRows = rows || [];
+          previousDue = duesRows?.reduce((sum, d) => sum + parseFloat(d.remaining_due || 0), 0) || 0;
+        }
 
-          // 🚍 Transport
-          const transport =
-            student.uses_transport && student.transport_charge
-              ? parseFloat(student.transport_charge)
-              : 0;
+        // ✅ Exclude transport during migration month
+        const transport =
+          !migrationStudentData && student.uses_transport && student.transport_charge
+            ? parseFloat(student.transport_charge)
+            : 0;
 
-          const baseFee =
-            tuition +
-            (include_exam_fee ? exam : 0) +
-            (include_annual_fee ? annual : 0) +
-            (include_computer_fee ? computer : 0) +
-            transport;
+        // ✅ During migration: NO regular fees (only show migrated amount)
+        // Regular months: Show all fees
+        const baseFee =
+          migrationStudentData
+            ? 0 // Migration month: no fees, only migrated pending due
+            : tuition +
+              (include_exam_fee ? exam : 0) +
+              (include_annual_fee ? annual : 0) +
+              (include_computer_fee ? computer : 0) +
+              transport;
 
-          const totalAmount = baseFee + previousDue;
+        const totalAmount = baseFee + previousDue;
 
-          // 🔎 Check existing bill first
-          const { data: existingBill } = await supabaseAdmin
+        const { data: existingBill } = await supabaseAdmin
+          .from("fee_bills")
+          .select("id")
+          .eq("student_id", student.id)
+          .eq("month", month)
+          .maybeSingle();
+
+        let billId;
+
+        if (existingBill) {
+          billId = existingBill.id;
+
+          await supabaseAdmin
+            .from("fee_bill_items")
+            .delete()
+            .eq("bill_id", billId);
+        } else {
+          const [yearPart, monthPart] = month.split("-");
+          const { data: receiptData, error: receiptError } =
+            await supabase.rpc("generate_receipt_number", {
+              p_year: parseInt(yearPart),
+              p_month: parseInt(monthPart),
+            });
+
+          if (receiptError) throw receiptError;
+
+          const { data: newBill } = await supabaseAdmin
             .from("fee_bills")
-            .select("id")
-            .eq("student_id", student.id)
-            .eq("month", month)
-            .maybeSingle();
+            .insert([
+              {
+                student_id: student.id,
+                month,
+                year,
+                total_amount: totalAmount,
+                net_payable: totalAmount,
+                bill_status: "unpaid",
+                receipt_number: receiptData,
+              },
+            ])
+            .select()
+            .single();
 
-          let billId;
+          billId = newBill.id;
+        }
 
-          if (existingBill) {
-            billId = existingBill.id;
+        const { data: advanceRows } = await supabaseAdmin
+          .from("advance_ledger")
+          .select("id, amount")
+          .eq("student_id", student.id)
+          .eq("status", "active")
+          .order("created_at", { ascending: true });
 
-            await supabaseAdmin
-              .from("fee_bill_items")
-              .delete()
-              .eq("bill_id", billId);
-          } else {
-            // Generate receipt number
-            const [year, monthPart] = month.split("-");
-            const { data: receiptData, error: receiptError } =
-              await supabase.rpc("generate_receipt_number", {
-                p_year: parseInt(year),
-                p_month: parseInt(monthPart),
-              });
+        let remainingToAdjust = totalAmount;
+        let totalAdvanceUsed = 0;
 
-            if (receiptError) throw receiptError;
+        if (advanceRows?.length) {
+          for (const adv of advanceRows) {
+            if (remainingToAdjust <= 0) break;
 
-            const receiptNumber = receiptData;
+            const advAmount = parseFloat(adv.amount || 0);
+            const useAmount = Math.min(advAmount, remainingToAdjust);
 
-            // Insert new bill with receipt number
-            const { data: newBill } = await supabaseAdmin
-              .from("fee_bills")
-              .insert([
-                {
-                  student_id: student.id,
-                  month,
-                  year,
-                  total_amount: totalAmount,
-                  net_payable: totalAmount,
-                  bill_status: "unpaid",
-                  receipt_number: receiptNumber, // Add receipt number here
-                },
-              ])
-              .select()
-              .single();
+            totalAdvanceUsed += useAmount;
+            remainingToAdjust -= useAmount;
 
-            billId = newBill.id;
-          }
-
-          // 🔥 APPLY ADVANCE FIFO
-          const { data: advanceRows } = await supabaseAdmin
-            .from("advance_ledger")
-            .select("id, amount")
-            .eq("student_id", student.id)
-            .eq("status", "active")
-            .order("created_at", { ascending: true });
-
-          let remainingToAdjust = totalAmount;
-          let totalAdvanceUsed = 0;
-          const usedAdvanceIds = [];
-          const partiallyUsedAdvances = [];
-
-          if (advanceRows?.length) {
-            for (const adv of advanceRows) {
-              if (remainingToAdjust <= 0) break;
-
-              const advAmount = parseFloat(adv.amount || 0);
-              const useAmount = Math.min(advAmount, remainingToAdjust);
-
-              totalAdvanceUsed += useAmount;
-              remainingToAdjust -= useAmount;
-              usedAdvanceIds.push(adv.id);
-
-              if (useAmount === advAmount) {
-                // fully consumed - set status to used
-                await supabaseAdmin
-                  .from("advance_ledger")
-                  .update({
-                    status: "used",
-                    used_for_bill_id: billId,
-                    used_at: new Date().toISOString(),
-                  })
-                  .eq("id", adv.id);
-              } else {
-                // 🟡 partial consume - track it and keep as active with reduced amount
-                partiallyUsedAdvances.push({
-                  advance_id: adv.id,
-                  used_amount: useAmount,
-                  remaining_amount: advAmount - useAmount,
-                  bill_id: billId
-                });
-
-                await supabaseAdmin
-                  .from("advance_ledger")
-                  .update({
-                    amount: advAmount - useAmount,
-                    used_for_bill_id: billId, // 🔑 Track which bill partially used this
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq("id", adv.id);
-              }
+            if (useAmount === advAmount) {
+              await supabaseAdmin
+                .from("advance_ledger")
+                .update({
+                  status: "used",
+                  used_for_bill_id: billId,
+                  used_at: new Date().toISOString(),
+                })
+                .eq("id", adv.id);
+            } else {
+              await supabaseAdmin
+                .from("advance_ledger")
+                .update({
+                  amount: advAmount - useAmount,
+                  used_for_bill_id: billId,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", adv.id);
             }
           }
+        }
 
-          const netPayable = remainingToAdjust;
+        const finalNetPayable = remainingToAdjust;
+        const finalStatus =
+          finalNetPayable === 0
+            ? "paid"
+            : finalNetPayable < totalAmount
+            ? "partial"
+            : "unpaid";
 
-          const status =
-            netPayable === 0
-              ? "paid"
-              : netPayable < totalAmount ? "partial" : "unpaid";
+        await supabaseAdmin
+          .from("fee_bills")
+          .update({
+            total_amount: totalAmount,
+            net_payable: finalNetPayable,
+            advance_used: totalAdvanceUsed,
+            bill_status: finalStatus,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", billId);
 
+        const standardizedItems = migrationStudentData
+          ? [
+              // Migration month: ONLY show migrated pending due
+              { fee_name: "Previous Due", amount: previousDue },
+            ]
+          : [
+              // Regular months: Show all fees
+              { fee_name: "Tuition Fee", amount: tuition },
+              { fee_name: "Exam Fee", amount: include_exam_fee ? exam : 0 },
+              { fee_name: "Annual Fee", amount: include_annual_fee ? annual : 0 },
+              { fee_name: "Computer Fee", amount: include_computer_fee ? computer : 0 },
+              { fee_name: "Transport Fee", amount: transport },
+              { fee_name: "Previous Due", amount: previousDue },
+            ];
+
+        await supabaseAdmin.from("fee_bill_items").insert(
+          standardizedItems.map((item) => ({
+            bill_id: billId,
+            fee_name: item.fee_name,
+            amount: item.amount,
+          }))
+        );
+
+        // ✅ Only update previous_dues status in NON-MIGRATION months
+        // During migration, previous_dues table is not used at all
+        if (duesRows?.length && !migrationStudentData) {
           await supabaseAdmin
-            .from("fee_bills")
+            .from("previous_dues")
             .update({
-              total_amount: totalAmount,
-              net_payable: netPayable,
-              bill_status: status,
+              status: "rolled",
+              to_month: month,
               updated_at: new Date().toISOString(),
             })
-            .eq("id", billId);
-
-          // 🧾 Insert bill items
-          // Ensure consistent fee structure
-          const standardizedItems = [
-            { fee_name: "Tuition Fee", amount: tuition },
-            { fee_name: "Exam Fee", amount: include_exam_fee ? exam : 0 },
-            { fee_name: "Annual Fee", amount: include_annual_fee ? annual : 0 },
-            { fee_name: "Computer Fee", amount: include_computer_fee ? computer : 0 },
-            { fee_name: "Transport Fee", amount: transport },
-            { fee_name: "Previous Due", amount: previousDue },
-          ];
-
-          // Calculate net payable and status
-          const finalNetPayable = remainingToAdjust;
-          const finalStatus = finalNetPayable === 0 ? "paid" : finalNetPayable < totalAmount ? "partial" : "unpaid";
-
-          // Insert bill items
-          await supabaseAdmin.from("fee_bill_items").insert(
-            standardizedItems.map((item) => ({
-              bill_id: billId,
-              fee_name: item.fee_name,
-              amount: item.amount,
-            }))
-          );
-
-          // Update bill summary
-          await supabaseAdmin
-            .from("fee_bills")
-            .update({
-              net_payable: finalNetPayable,
-              advance_used: totalAdvanceUsed,
-              bill_status: finalStatus,
-            })
-            .eq("id", billId);
-
-          // 🔥 Mark dues as rolled
-          if (duesRows?.length) {
-            await supabaseAdmin
-              .from("previous_dues")
-              .update({
-                status: "rolled",
-                to_month: month,
-                updated_at: new Date().toISOString(),
-              })
-              .in("id", duesRows.map((d) => d.id));
-          }
-
-          return { success: true };
-        } catch (err) {
-          return { success: false, error: err.message };
+            .in("id", duesRows.map((d) => d.id));
         }
-      })
-    );
 
-    const successCount = results.filter((r) => r.success).length;
-    const errorCount = results.length - successCount;
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    })
+  );
+
+  const successCount = results.filter((r) => r.success).length;
+  const errorCount = results.length - successCount;
+
+  return { successCount, errorCount, total: results.length };
+};
+
+export const generateBillsForClass = async (req, res) => {
+  try {
+    const {
+      class: className,
+      month,
+      section,
+      include_exam_fee = true,
+      include_annual_fee = true,
+      include_computer_fee = true,
+    } = req.body;
+
+    const summary = await createBillsForClass(className, month, section, {
+      include_exam_fee,
+      include_annual_fee,
+      include_computer_fee,
+    });
 
     return res.json({
-      message: `Bills generated for ${successCount} students`,
+      message: `Bills generated for ${summary.successCount} students`,
       month,
-      successCount,
-      errorCount,
+      ...summary,
     });
   } catch (error) {
     return res.status(500).json({
@@ -459,6 +467,10 @@ export const generateBillsForClass = async (req, res) => {
     });
   }
 };
+
+
+
+
 
 
 
