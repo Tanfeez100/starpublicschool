@@ -99,6 +99,11 @@ const MAX_READ_CACHE_ITEMS = toPositiveInt(
 );
 const RESULT_TERMINAL_LABELS = ["First", "Second", "Third", "Annual"];
 const RESULT_BY_ROLL_RESPONSE_VERSION = "v2";
+const MARK_STATUS = {
+  PENDING: "PENDING",
+  SUBMITTED: "SUBMITTED",
+  LOCKED: "LOCKED",
+};
 
 const readResponseCache = new Map();
 
@@ -197,6 +202,27 @@ const normalizeResultTerminalLabel = (value) => {
   }
 
   return null;
+};
+
+const normalizeMarkStatus = (status) =>
+  String(status || MARK_STATUS.PENDING)
+    .trim()
+    .toUpperCase();
+
+const isSubmittedMark = (status) => normalizeMarkStatus(status) === MARK_STATUS.SUBMITTED;
+
+const invalidatePublishedResultForStudentTerminal = async (studentId, terminal) => {
+  if (!studentId || !terminal) return;
+
+  const { error } = await supabase
+    .from("result_summary")
+    .delete()
+    .eq("student_id", studentId)
+    .eq("terminal", terminal);
+
+  if (error) {
+    console.warn("Failed to invalidate published result summary:", error);
+  }
 };
 
 /**
@@ -951,10 +977,11 @@ export const getResultByClassRoll = async (req, res) => {
       Third: "third_term",
       Annual: "annual_term",
     };
+    let publishedMap = new Map();
     if (RESULT_TERMINAL_LABELS.length) {
       const { data: publishedRows, error: publishedError } = await supabase
         .from("result_summary")
-        .select("terminal, status, rank, calculated_at")
+        .select("terminal, status, total_marks, total_obtained, percentage, division, rank, calculated_at")
         .eq("student_id", student.id);
 
       if (publishedError) {
@@ -964,7 +991,6 @@ export const getResultByClassRoll = async (req, res) => {
         });
       }
 
-      const publishedMap = new Map();
       (publishedRows || []).forEach((row) => {
         const normalizedLabel = normalizeResultTerminalLabel(row.terminal);
         if (!normalizedLabel) return;
@@ -988,6 +1014,10 @@ export const getResultByClassRoll = async (req, res) => {
 
         summaryByColumn[label] = {
           ...summaryByColumn[label],
+          total_max_marks: row.total_marks ?? summaryByColumn[label].total_max_marks,
+          total_obtained: row.total_obtained ?? summaryByColumn[label].total_obtained,
+          percentage: row.percentage ?? summaryByColumn[label].percentage,
+          division: row.division || summaryByColumn[label].division,
           rank: row.rank ?? null,
           status: row.status || summaryByColumn[label].status,
           published_date: row.calculated_at
@@ -995,21 +1025,13 @@ export const getResultByClassRoll = async (req, res) => {
             : null,
         };
       });
+    }
 
-      // If annual publish row is absent, reuse Third metadata for annual view.
-      if (!publishedMap.has("Annual")) {
-        const thirdRow = publishedMap.get("Third");
-        if (thirdRow) {
-          summaryByColumn.Annual = {
-            ...summaryByColumn.Annual,
-            rank: thirdRow.rank ?? null,
-            status: thirdRow.status || summaryByColumn.Annual.status,
-            published_date: thirdRow.calculated_at
-              ? new Date(thirdRow.calculated_at).toISOString().split("T")[0]
-              : null,
-          };
-        }
-      }
+    const requestedPublishedSummary = publishedMap.get(requestedTerminal);
+    if (!requestedPublishedSummary || normalizeMarkStatus(requestedPublishedSummary.status) !== "PUBLISHED") {
+      return res.status(404).json({
+        message: "Result not published yet",
+      });
     }
 
     const buildScopedMetric = (selector, scopedTermLabels) => {
@@ -1185,7 +1207,7 @@ export const submitMarks = async (req, res) => {
     // Check existing marks for this student and terminal
     const { data: existingMarks, error: existingMarksError } = await supabase
       .from("marks")
-      .select("id, subject_id, external_marks, internal_marks")
+      .select("id, subject_id, external_marks, internal_marks, status")
       .eq("student_id", student.id)
       .eq("terminal", terminal);
 
@@ -1335,6 +1357,10 @@ export const submitMarks = async (req, res) => {
           error: insertError.message 
         });
       }
+    }
+
+    if (markRecords.length > 0) {
+      await invalidatePublishedResultForStudentTerminal(student.id, terminal);
     }
 
     invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
@@ -1491,7 +1517,7 @@ export const editMarks = async (req, res) => {
         .update({
           external_marks: normalizedMarks.external_marks,
           internal_marks: normalizedMarks.internal_marks,
-          status: "SUBMITTED",
+          status: MARK_STATUS.SUBMITTED,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingMark.id)
@@ -1525,6 +1551,10 @@ export const editMarks = async (req, res) => {
         not_found: notFound,
         note: "Use POST /api/marks/submit to add new marks.",
       });
+    }
+
+    if (updated.length > 0) {
+      await invalidatePublishedResultForStudentTerminal(student.id, terminal);
     }
 
     invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
@@ -1571,7 +1601,7 @@ export const publishResult = async (req, res) => {
     // Get all students in class (and section if provided)
     let studentsQuery = supabase
       .from("students")
-      .select("id, name, class, section, roll_no")
+      .select("id, name, class, section, roll_no, status")
       .eq("class", className);
 
     if (section) {
@@ -1583,6 +1613,17 @@ export const publishResult = async (req, res) => {
     if (studentsError || !students?.length) {
       return res.status(404).json({ 
         message: `No students found for class "${className}"${section ? ` section "${section}"` : ""}` 
+      });
+    }
+
+    const activeStudents = students.filter((student) => {
+      const status = String(student?.status || "active").trim().toLowerCase();
+      return status === "active";
+    });
+
+    if (!activeStudents.length) {
+      return res.status(404).json({
+        message: `No active students found for class "${className}"${section ? ` section "${section}"` : ""}`,
       });
     }
 
@@ -1656,6 +1697,71 @@ export const publishResult = async (req, res) => {
       });
     }
 
+    const subjectIds = classSubjects
+      .map((cs) => cs.subject_id)
+      .filter(Boolean);
+
+    const publishIssues = [];
+    for (const student of activeStudents) {
+      const { data: studentMarks, error: marksError } = await supabase
+        .from("marks")
+        .select("subject_id, status")
+        .eq("student_id", student.id)
+        .eq("terminal", terminal)
+        .in("subject_id", subjectIds);
+
+      if (marksError) {
+        return res.status(500).json({
+          message: `Failed to verify mark status for ${student.name}`,
+          error: marksError.message,
+        });
+      }
+
+      const marksMap = new Map();
+      (studentMarks || []).forEach((row) => {
+        if (row?.subject_id) {
+          marksMap.set(row.subject_id, row);
+        }
+      });
+
+      const missingSubjects = [];
+      const nonSubmittedSubjects = [];
+
+      classSubjects.forEach((cs) => {
+        const subject = cs.subjects;
+        const subjectId = cs.subject_id || subject?.id;
+        if (!subjectId || !subject) return;
+
+        const markRow = marksMap.get(subjectId);
+        if (!markRow) {
+          missingSubjects.push(subject.name);
+          return;
+        }
+
+        if (!isSubmittedMark(markRow.status)) {
+          nonSubmittedSubjects.push(subject.name);
+        }
+      });
+
+      if (missingSubjects.length || nonSubmittedSubjects.length) {
+        publishIssues.push({
+          student_id: student.id,
+          name: student.name,
+          roll_no: student.roll_no,
+          section: student.section,
+          missing_subjects: missingSubjects,
+          not_submitted_subjects: nonSubmittedSubjects,
+        });
+      }
+    }
+
+    if (publishIssues.length > 0) {
+      return res.status(409).json({
+        message: "Result cannot be published until all marks are submitted",
+        issues: publishIssues,
+      });
+    }
+
     // Calculate total max marks based on subject maxima.
     const totalMaxMarks = classSubjects.reduce(
       (sum, cs) => sum + getSubjectMaxMarks(cs.subjects),
@@ -1667,7 +1773,7 @@ export const publishResult = async (req, res) => {
     const errors = [];
 
     // Process each student to calculate their percentage
-    for (const student of students) {
+    for (const student of activeStudents) {
       try {
         // Get marks for this student
         const subjectIds = classSubjects.map((cs) => cs.subject_id);
@@ -1703,6 +1809,7 @@ export const publishResult = async (req, res) => {
           student_id: student.id,
           name: student.name,
           roll_no: student.roll_no,
+          section: student.section || null,
           total_obtained: totalObtained,
           percentage,
           division,
@@ -1712,16 +1819,29 @@ export const publishResult = async (req, res) => {
       }
     }
 
-    // Sort by percentage descending to determine rank
-    const sortedResults = [...studentResults].sort((a, b) => b.percentage - a.percentage);
-    
-    // Create rank map (only top 10 get ranks)
+    // Sort and rank within each section independently
     const rankMap = {};
-    sortedResults.forEach((result, index) => {
-      if (index < 10) {
-        rankMap[result.student_id] = index + 1;
+    const resultsBySection = new Map();
+
+    studentResults.forEach((result) => {
+      const sectionKey = String(result.section || "All").trim() || "All";
+      if (!resultsBySection.has(sectionKey)) {
+        resultsBySection.set(sectionKey, []);
       }
+      resultsBySection.get(sectionKey).push(result);
     });
+
+    for (const [, sectionResults] of resultsBySection) {
+      const sortedSectionResults = [...sectionResults].sort(
+        (a, b) => b.percentage - a.percentage
+      );
+
+      sortedSectionResults.forEach((result, index) => {
+        if (index < 10) {
+          rankMap[result.student_id] = index + 1;
+        }
+      });
+    }
 
     // Second pass: Save results with ranks
     const publishedResults = [];
@@ -1757,6 +1877,7 @@ export const publishResult = async (req, res) => {
           student_id: result.student_id,
           name: result.name,
           roll_no: result.roll_no,
+          section: result.section,
           total_obtained: result.total_obtained,
           percentage: result.percentage,
           division: result.division,
@@ -1824,7 +1945,7 @@ export const publishResult = async (req, res) => {
       section: section || "All",
       terminal,
       published: publishedResults.length,
-      total_students: students.length,
+      total_students: activeStudents.length,
       promotion: promotion || undefined,
       results: publishedResults,
       errors: errors.length > 0 ? errors : undefined,
@@ -1875,20 +1996,55 @@ export const getMarks = async (req, res) => {
     }
 
     // Get all students in class (and section if provided)
-    let studentsQuery = supabase
-      .from("students")
-      .select("id, name, class, section, roll_no")
-      .eq("class", className);
+    const buildStudentsQuery = (includeStatus) => {
+      let query = supabase
+        .from("students")
+        .select(includeStatus
+          ? "id, name, class, section, roll_no, status"
+          : "id, name, class, section, roll_no")
+        .eq("class", className);
 
-    if (section) {
-      studentsQuery = studentsQuery.eq("section", section);
+      if (section) {
+        query = query.eq("section", section);
+      }
+
+      return query;
+    };
+
+    let students = null;
+    let studentsError = null;
+    let studentsQueryResult = await buildStudentsQuery(true).order("roll_no");
+    students = studentsQueryResult.data;
+    studentsError = studentsQueryResult.error;
+
+    if (studentsError && isMissingColumnError(studentsError, "status")) {
+      studentsQueryResult = await buildStudentsQuery(false).order("roll_no");
+      students = studentsQueryResult.data;
+      studentsError = studentsQueryResult.error;
     }
-
-    const { data: students, error: studentsError } = await studentsQuery.order("roll_no");
 
     if (studentsError || !students?.length) {
       return res.status(404).json({ 
         message: `No students found for class "${className}"${section ? ` section "${section}"` : ""}` 
+      });
+    }
+
+    const activeStudents = students.filter((student) => {
+      const status = String(student?.status || "active").trim().toLowerCase();
+      return status === "active";
+    });
+
+    if (!activeStudents.length) {
+      return res.status(404).json({
+        message: `No active students found for class "${className}"${section ? ` section "${section}"` : ""}`,
+      });
+    }
+
+    const studentsToShow = activeStudents;
+
+    if (!studentsToShow.length) {
+      return res.status(404).json({
+        message: `No active students found for class "${className}"${section ? ` section "${section}"` : ""}`,
       });
     }
 
@@ -1914,7 +2070,7 @@ export const getMarks = async (req, res) => {
     }
 
     const subjectIds = classSubjects.map((cs) => cs.subject_id);
-    const studentIds = students.map((s) => s.id);
+    const studentIds = studentsToShow.map((s) => s.id);
     const fetchAllKnownTerminals = Boolean(
       normalizeResultTerminalLabel(requestedTerminalRaw)
     );
@@ -1961,7 +2117,7 @@ export const getMarks = async (req, res) => {
     const buildTerminalPayload = (terminalLabel) => {
       const marksByStudent = marksByTerminalAndStudent[terminalLabel] || {};
 
-      const studentsWithMarks = students.map((student) => {
+      const studentsWithMarks = studentsToShow.map((student) => {
         const studentMarks = marksByStudent[student.id] || {};
         const marks = classSubjects.map((cs) => {
           const subject = cs.subjects;

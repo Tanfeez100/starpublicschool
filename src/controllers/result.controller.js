@@ -171,6 +171,9 @@ const buildSubjectKey = (row, subjectMeta) => {
   return subjectName ? `name:${subjectName}` : `row:${row?.id || Math.random()}`;
 };
 
+const isPublishedSummary = (status) =>
+  String(status || "").trim().toUpperCase() === "PUBLISHED";
+
 const dedupeRowsByTermAndSubject = (rows, subjectMap) => {
   const map = new Map();
 
@@ -408,6 +411,27 @@ export const getResult = async (req, res) => {
     }
 
     const student = students[0];
+    const currentTermLabel = TERM_DB_LABEL[normalizedTerm];
+
+    const { data: publishedSummary, error: publishedError } = await supabase
+      .from("result_summary")
+      .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
+      .eq("student_id", student.id)
+      .eq("terminal", currentTermLabel)
+      .maybeSingle();
+
+    if (publishedError) {
+      return res.status(500).json({
+        message: "Failed to fetch published result",
+        error: publishedError.message,
+      });
+    }
+
+    if (!publishedSummary || !isPublishedSummary(publishedSummary.status)) {
+      return res.status(404).json({
+        message: "Result not published yet",
+      });
+    }
 
     const { data: rawMarks, error: marksError } = await supabase
       .from("marks")
@@ -522,12 +546,10 @@ export const getResult = async (req, res) => {
 
     const roundedTotalObtained = Number(totalObtained.toFixed(2));
     const roundedTotalFullMarks = Number(totalFullMarks.toFixed(2));
-    const percentage =
-      roundedTotalFullMarks > 0
-        ? Number(((roundedTotalObtained / roundedTotalFullMarks) * 100).toFixed(2))
-        : 0;
-    const division = divisionFromPercentage(percentage);
-    const currentTermLabel = TERM_DB_LABEL[normalizedTerm];
+    const percentage = Number(
+      toNumberOrDefault(publishedSummary.percentage, 0).toFixed(2)
+    );
+    const division = publishedSummary.division || divisionFromPercentage(percentage);
 
     const studentDetails = {
       id: student.id,
@@ -542,14 +564,18 @@ export const getResult = async (req, res) => {
     };
 
     const summary = {
-      totalObtained: roundedTotalObtained,
-      totalFullMarks: roundedTotalFullMarks,
+      totalObtained: Number(toNumberOrDefault(publishedSummary.total_obtained, roundedTotalObtained).toFixed(2)),
+      totalFullMarks: Number(toNumberOrDefault(publishedSummary.total_marks, roundedTotalFullMarks).toFixed(2)),
       percentage,
       division,
       // Backward-compatible aliases
-      total_obtained: roundedTotalObtained,
-      total_max_marks: roundedTotalFullMarks,
-      status: roundedTotalFullMarks > 0 ? "Published" : "Pending",
+      total_obtained: Number(toNumberOrDefault(publishedSummary.total_obtained, roundedTotalObtained).toFixed(2)),
+      total_max_marks: Number(toNumberOrDefault(publishedSummary.total_marks, roundedTotalFullMarks).toFixed(2)),
+      status: "Published",
+      rank: publishedSummary.rank ?? null,
+      published_date: publishedSummary.calculated_at
+        ? new Date(publishedSummary.calculated_at).toISOString().split("T")[0]
+        : null,
     };
 
     return res.json({

@@ -1,5 +1,57 @@
 import { supabase } from "../services/supabase.js";
 
+const normalizeSection = (section) => {
+  const value = String(section ?? "").trim();
+  return value || null;
+};
+
+const applyClassSubjectScope = (query, className, section) => {
+  let scopedQuery = query.eq("class", className);
+  const normalizedSection = normalizeSection(section);
+
+  if (normalizedSection) {
+    scopedQuery = scopedQuery.eq("section", normalizedSection);
+  } else {
+    scopedQuery = scopedQuery.is("section", null);
+  }
+
+  return scopedQuery;
+};
+
+const invalidatePublishedResultsForStudentIds = async (studentIds = []) => {
+  const uniqueStudentIds = Array.from(
+    new Set((studentIds || []).map((id) => String(id || "").trim()).filter(Boolean))
+  );
+
+  if (!uniqueStudentIds.length) return;
+
+  const { error } = await supabase
+    .from("result_summary")
+    .delete()
+    .in("student_id", uniqueStudentIds);
+
+  if (error) {
+    console.warn("Failed to invalidate published result summaries:", error);
+  }
+};
+
+const invalidatePublishedResultsForClassScope = async (className, section) => {
+  let query = supabase.from("students").select("id").eq("class", className);
+  const normalizedSection = normalizeSection(section);
+
+  if (normalizedSection) {
+    query = query.eq("section", normalizedSection);
+  }
+
+  const { data: students, error } = await query;
+  if (error) {
+    console.warn("Failed to load students for result invalidation:", error);
+    return;
+  }
+
+  await invalidatePublishedResultsForStudentIds((students || []).map((student) => student.id));
+};
+
 /**
  * Create a new subject (only name and code)
  */
@@ -329,8 +381,9 @@ export const getClassSubjects = async (req, res) => {
  */
 export const addSubjectToClass = async (req, res) => {
   try {
-    const { class: classNameRaw, subject_name, subject_code, sequence } = req.body;
+    const { class: classNameRaw, section, subject_name, subject_code, sequence } = req.body;
     const className = classNameRaw?.trim();
+    const normalizedSection = normalizeSection(section);
 
     // Validation
     if (!className) {
@@ -377,12 +430,14 @@ export const addSubjectToClass = async (req, res) => {
     const subject_id = subject.id;
 
     // Check if subject already exists for this class
-    const { data: existingRows, error: checkError } = await supabase
+    let existingScopeQuery = supabase
       .from("class_subjects")
       .select("id")
-      .eq("class", className)
       .eq("subject_id", subject_id)
       .limit(1);
+    existingScopeQuery = applyClassSubjectScope(existingScopeQuery, className, normalizedSection);
+
+    const { data: existingRows, error: checkError } = await existingScopeQuery;
 
     if (checkError && checkError.code !== "PGRST116") {
       console.error("Check existing error:", checkError);
@@ -394,24 +449,51 @@ export const addSubjectToClass = async (req, res) => {
 
     if (existingRows && existingRows.length > 0) {
       return res.status(400).json({ 
-        message: `Subject "${subject.name}" is already assigned to class "${className}"` 
+        message: `Subject "${subject.name}" is already assigned to class "${className}"${normalizedSection ? ` section "${normalizedSection}"` : ""}` 
       });
     }
 
-    // Get max sequence for this class
+    const numericSequence =
+      sequence === undefined || sequence === null || String(sequence).trim() === ""
+        ? null
+        : Number(sequence);
+
+    if (numericSequence !== null && (!Number.isFinite(numericSequence) || numericSequence <= 0)) {
+      return res.status(400).json({
+        message: "sequence must be a positive number",
+      });
+    }
+
+    // Get max sequence for this class scope
     let maxSequence = 0;
-    if (sequence === undefined || sequence === null) {
-      const { data: lastSubject } = await supabase
+    if (numericSequence === null) {
+      let sequenceQuery = supabase
         .from("class_subjects")
-        .select("sequence")
-        .eq("class", className)
+        .select("sequence");
+      sequenceQuery = applyClassSubjectScope(sequenceQuery, className, normalizedSection);
+
+      const { data: lastSubject } = await sequenceQuery
         .order("sequence", { ascending: false })
         .limit(1)
         .maybeSingle();
 
       maxSequence = (lastSubject?.sequence || 0) + 1;
     } else {
-      maxSequence = Number(sequence);
+      let duplicateSequenceQuery = supabase
+        .from("class_subjects")
+        .select("id")
+        .eq("sequence", numericSequence)
+        .limit(1);
+      duplicateSequenceQuery = applyClassSubjectScope(duplicateSequenceQuery, className, normalizedSection);
+
+      const { data: duplicateSequence } = await duplicateSequenceQuery;
+      if (duplicateSequence && duplicateSequence.length > 0) {
+        return res.status(409).json({
+          message: `Sequence ${numericSequence} is already used for class "${className}"${normalizedSection ? ` section "${normalizedSection}"` : ""}`,
+        });
+      }
+
+      maxSequence = numericSequence;
     }
 
     // Insert subject to class
@@ -422,6 +504,7 @@ export const addSubjectToClass = async (req, res) => {
           class: className,
           subject_id: subject_id,
           sequence: maxSequence,
+          section: normalizedSection,
         },
       ])
       .select(`
@@ -443,6 +526,8 @@ export const addSubjectToClass = async (req, res) => {
         error: error.message
       });
     }
+
+    await invalidatePublishedResultsForClassScope(className, normalizedSection);
 
     // Success - existing subject added to class
     res.status(201).json({
@@ -474,6 +559,7 @@ export const removeSubjectFromClass = async (req, res) => {
 
     let deleteQuery;
     let subjectInfo = null;
+    let subjectIdForCleanup = null;
 
     if (id) {
       // Delete by class_subjects id
@@ -482,6 +568,8 @@ export const removeSubjectFromClass = async (req, res) => {
         .from("class_subjects")
         .select(`
           class,
+          section,
+          subject_id,
           subjects (name, code)
         `)
         .eq("id", id)
@@ -495,9 +583,10 @@ export const removeSubjectFromClass = async (req, res) => {
 
       subjectInfo = {
         class: existing.class,
-        section: section || null, // Section is for reference only (stored in students table)
+        section: existing.section || null,
         subject: existing.subjects,
       };
+      subjectIdForCleanup = existing.subject_id;
 
       deleteQuery = supabase
         .from("class_subjects")
@@ -555,6 +644,7 @@ export const removeSubjectFromClass = async (req, res) => {
         section: existing.section,
         subject: existing.subjects,
       };
+      subjectIdForCleanup = subject.id;
 
       // Delete by class, section, and subject_id
       deleteQuery = supabase
@@ -578,6 +668,37 @@ export const removeSubjectFromClass = async (req, res) => {
         message: "Failed to remove subject from class",
         error: error.message 
       });
+    }
+
+    if (subjectIdForCleanup && subjectInfo?.class) {
+      let studentsQuery = supabase
+        .from("students")
+        .select("id")
+        .eq("class", subjectInfo.class);
+
+      if (subjectInfo.section) {
+        studentsQuery = studentsQuery.eq("section", subjectInfo.section);
+      }
+
+      const { data: affectedStudents, error: studentsError } = await studentsQuery;
+      if (studentsError) {
+        console.warn("Failed to load affected students for cleanup:", studentsError);
+      } else {
+        const studentIds = (affectedStudents || []).map((student) => student.id);
+        if (studentIds.length > 0) {
+          const { error: marksDeleteError } = await supabase
+            .from("marks")
+            .delete()
+            .eq("subject_id", subjectIdForCleanup)
+            .in("student_id", studentIds);
+
+          if (marksDeleteError) {
+            console.warn("Failed to delete marks while removing class subject:", marksDeleteError);
+          }
+
+          await invalidatePublishedResultsForStudentIds(studentIds);
+        }
+      }
     }
 
     if (!subjectInfo) {
@@ -687,6 +808,28 @@ export const deleteSubject = async (req, res) => {
     const isUsedInClasses = classSubjects && classSubjects.length > 0;
     const classesCount = classSubjects?.length || 0;
 
+    const affectedStudentIdSet = new Set();
+    for (const mapping of classSubjects || []) {
+      let studentsQuery = supabase
+        .from("students")
+        .select("id")
+        .eq("class", mapping.class);
+
+      if (mapping.section) {
+        studentsQuery = studentsQuery.eq("section", mapping.section);
+      }
+
+      const { data: scopedStudents, error: scopedStudentsError } = await studentsQuery;
+      if (scopedStudentsError) {
+        console.warn("Failed to load students for subject cleanup:", scopedStudentsError);
+        continue;
+      }
+
+      (scopedStudents || []).forEach((student) => {
+        if (student?.id) affectedStudentIdSet.add(student.id);
+      });
+    }
+
     // Check if subject has any marks
     const { data: marksData, error: marksCheckError } = await supabase
       .from("marks")
@@ -730,6 +873,10 @@ export const deleteSubject = async (req, res) => {
           error: deleteMarksError.message 
         });
       }
+    }
+
+    if (affectedStudentIdSet.size > 0) {
+      await invalidatePublishedResultsForStudentIds(Array.from(affectedStudentIdSet));
     }
 
     // Step 3: Now delete from subjects table (no foreign key constraint issue)
@@ -787,9 +934,59 @@ export const updateSubjectSequence = async (req, res) => {
       });
     }
 
+    const numericSequence = Number(sequence);
+    if (!Number.isFinite(numericSequence) || numericSequence <= 0) {
+      return res.status(400).json({
+        message: "sequence must be a positive number",
+      });
+    }
+
+    const { data: existingRow, error: existingError } = await supabase
+      .from("class_subjects")
+      .select("id, class, section, sequence")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error("Fetch class subject error:", existingError);
+      return res.status(500).json({
+        message: "Failed to load subject assignment",
+        error: existingError.message,
+      });
+    }
+
+    if (!existingRow) {
+      return res.status(404).json({
+        message: "Subject assignment not found",
+      });
+    }
+
+    let duplicateQuery = supabase
+      .from("class_subjects")
+      .select("id")
+      .eq("sequence", numericSequence)
+      .neq("id", id)
+      .limit(1);
+    duplicateQuery = applyClassSubjectScope(duplicateQuery, existingRow.class, existingRow.section);
+
+    const { data: duplicateRows, error: duplicateError } = await duplicateQuery;
+    if (duplicateError) {
+      console.error("Check duplicate sequence error:", duplicateError);
+      return res.status(500).json({
+        message: "Failed to validate sequence",
+        error: duplicateError.message,
+      });
+    }
+
+    if (duplicateRows && duplicateRows.length > 0) {
+      return res.status(409).json({
+        message: `Sequence ${numericSequence} is already used for class "${existingRow.class}"${existingRow.section ? ` section "${existingRow.section}"` : ""}`,
+      });
+    }
+
     const { data, error } = await supabase
       .from("class_subjects")
-      .update({ sequence: Number(sequence) })
+      .update({ sequence: numericSequence })
       .eq("id", id)
       .select(`
         id,
@@ -833,6 +1030,7 @@ export const updateSubjectSequence = async (req, res) => {
 export const addMultipleSubjectsToClass = async (req, res) => {
   try {
     const { class: className, section, subjects } = req.body;
+    const normalizedSection = normalizeSection(section);
 
     if (!className || !subjects) {
       return res.status(400).json({ 
@@ -887,11 +1085,12 @@ export const addMultipleSubjectsToClass = async (req, res) => {
     }
 
     // Get existing subjects for this class and section
-    const { data: existing } = await supabase
+    let existingQuery = supabase
       .from("class_subjects")
-      .select("subject_id")
-      .eq("class", className)
-      .eq("section", section);
+      .select("subject_id");
+    existingQuery = applyClassSubjectScope(existingQuery, className, normalizedSection);
+
+    const { data: existing } = await existingQuery;
 
     const existingIds = existing?.map((e) => e.subject_id) || [];
     const newSubjectIds = subject_ids.filter((id) => !existingIds.includes(id));
@@ -903,11 +1102,12 @@ export const addMultipleSubjectsToClass = async (req, res) => {
     }
 
     // Get max sequence for this class and section
-    const { data: lastSubject } = await supabase
+    let lastSubjectQuery = supabase
       .from("class_subjects")
-      .select("sequence")
-      .eq("class", className)
-      .eq("section", section)
+      .select("sequence");
+    lastSubjectQuery = applyClassSubjectScope(lastSubjectQuery, className, normalizedSection);
+
+    const { data: lastSubject } = await lastSubjectQuery
       .order("sequence", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -919,7 +1119,7 @@ export const addMultipleSubjectsToClass = async (req, res) => {
       class: className,
       subject_id: subject_id,
       sequence: currentSequence++,
-      section: section,
+      section: normalizedSection,
     }));
 
     // Insert all subjects
@@ -945,6 +1145,8 @@ export const addMultipleSubjectsToClass = async (req, res) => {
         error: error.message 
       });
     }
+
+    await invalidatePublishedResultsForClassScope(className, normalizedSection);
 
     res.status(201).json({
       success: true,
