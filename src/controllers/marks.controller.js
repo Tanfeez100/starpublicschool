@@ -282,6 +282,250 @@ const fetchClassSubjectsWithFallback = async (className, section) => {
 const isProvided = (value) =>
   value !== undefined && value !== null && String(value).trim() !== "";
 
+const normalizeLookupValue = (value) => String(value || "").trim();
+
+const resolveStudentForSubmission = async ({
+  className,
+  section,
+  roll_no,
+  academic_year: academicYear,
+}) => {
+  const normalizedClass = normalizeLookupValue(className);
+  const normalizedSection = normalizeLookupValue(section);
+  const normalizedRoll = Number(roll_no);
+  const normalizedAcademicYear = normalizeLookupValue(academicYear);
+
+  if (!normalizedClass || !Number.isFinite(normalizedRoll)) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          message: "class and roll_no are required",
+        },
+      },
+    };
+  }
+
+  const mapStudent = (student) => ({
+    id: student.id,
+    name: student.name,
+    class: student.class,
+    section: student.section,
+    roll_no: student.roll_no,
+    academic_year: student.academic_year || null,
+    status: student.status || null,
+  });
+
+  const pickBestStudent = (rows = []) => {
+    if (!rows.length) return null;
+
+    const sorted = [...rows].sort((a, b) => {
+      const aYear = String(a?.academic_year || "");
+      const bYear = String(b?.academic_year || "");
+      if (aYear !== bYear) return bYear.localeCompare(aYear);
+
+      const aCreated = new Date(a?.created_at || 0).getTime();
+      const bCreated = new Date(b?.created_at || 0).getTime();
+      if (aCreated !== bCreated) return bCreated - aCreated;
+
+      return String(a?.id || "").localeCompare(String(b?.id || ""));
+    });
+
+    return sorted[0];
+  };
+
+  const buildStudentQuery = (includeStatus) => {
+    let query = supabase
+      .from("students")
+      .select(
+        includeStatus
+          ? "id, name, class, section, roll_no, academic_year, status, created_at"
+          : "id, name, class, section, roll_no, academic_year, created_at"
+      )
+      .eq("class", normalizedClass)
+      .eq("roll_no", normalizedRoll);
+
+    if (normalizedSection) {
+      query = query.ilike("section", normalizedSection);
+    }
+
+    if (normalizedAcademicYear) {
+      query = query.eq("academic_year", normalizedAcademicYear);
+    }
+
+    return query.order("academic_year", { ascending: false }).order("created_at", { ascending: false }).limit(5);
+  };
+
+  let rows = null;
+  let queryError = null;
+
+  const activeQuery = await buildStudentQuery(true);
+  rows = activeQuery.data;
+  queryError = activeQuery.error;
+
+  if (queryError && isMissingColumnError(queryError, "status")) {
+    const fallbackQuery = await buildStudentQuery(false);
+    rows = fallbackQuery.data;
+    queryError = fallbackQuery.error;
+  }
+
+  if (queryError) {
+    return {
+      error: {
+        status: 500,
+        body: {
+          message: "Failed to resolve student",
+          error: queryError.message,
+        },
+      },
+    };
+  }
+
+  const chosenStudent = pickBestStudent(rows || []);
+
+  if (!chosenStudent) {
+    return {
+      error: {
+        status: 404,
+        body: {
+          message: "Student not found. Please check class, section, and roll number.",
+        },
+      },
+    };
+  }
+
+  return { student: mapStudent(chosenStudent) };
+};
+
+const resolveStudentForResult = async ({
+  className,
+  roll,
+  section,
+  academicYears = [],
+}) => {
+  const normalizedClass = normalizeLookupValue(className);
+  const normalizedSection = normalizeLookupValue(section);
+  const normalizedRoll = Number(roll);
+  const normalizedAcademicYears = (academicYears || [])
+    .map((value) => normalizeLookupValue(value))
+    .filter(Boolean);
+
+  if (!normalizedClass || !Number.isFinite(normalizedRoll)) {
+    return {
+      error: {
+        status: 400,
+        body: { message: "class and roll are required" },
+      },
+    };
+  }
+
+  const buildQuery = (includeStatus) => {
+    let query = supabase
+      .from("students")
+      .select(
+        includeStatus
+          ? "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at"
+          : "id, name, father_name, mother_name, class, section, roll_no, academic_year, created_at"
+      )
+      .eq("class", normalizedClass)
+      .eq("roll_no", normalizedRoll);
+
+    if (normalizedSection) {
+      query = query.ilike("section", normalizedSection);
+    }
+
+    if (normalizedAcademicYears.length) {
+      query = query.in("academic_year", normalizedAcademicYears);
+    }
+
+    if (includeStatus) {
+      query = query.eq("status", "active");
+    }
+
+    return query.order("academic_year", { ascending: false }).order("created_at", { ascending: false }).limit(5);
+  };
+
+  const mapStudent = (student) => ({
+    id: student.id,
+    name: student.name,
+    father_name: student.father_name || null,
+    mother_name: student.mother_name || null,
+    class: student.class,
+    section: student.section,
+    roll_no: student.roll_no,
+    academic_year: student.academic_year || null,
+    status: student.status || null,
+  });
+
+  let queryResult = await buildQuery(true);
+  let rows = queryResult.data;
+  let error = queryResult.error;
+
+  if (error && isMissingColumnError(error, "status")) {
+    queryResult = await buildQuery(false);
+    rows = queryResult.data;
+    error = queryResult.error;
+  }
+
+  if (error) {
+    return {
+      error: {
+        status: 500,
+        body: {
+          message: "Failed to fetch student",
+          error: error.message,
+        },
+      },
+    };
+  }
+
+  const students = (rows || []).map(mapStudent);
+  if (!students.length) {
+    let fallbackQuery = supabase
+      .from("students")
+      .select(
+        "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at"
+      )
+      .eq("class", normalizedClass)
+      .eq("roll_no", normalizedRoll)
+      .eq("status", "active")
+      .order("academic_year", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (normalizedSection) {
+      fallbackQuery = fallbackQuery.ilike("section", normalizedSection);
+    }
+
+    const fallbackResult = await fallbackQuery;
+    if (fallbackResult.error) {
+      return {
+        error: {
+          status: 500,
+          body: {
+            message: "Failed to fetch student",
+            error: fallbackResult.error.message,
+          },
+        },
+      };
+    }
+
+    const fallbackStudents = (fallbackResult.data || []).map(mapStudent);
+    if (!fallbackStudents.length) {
+      return {
+        error: {
+          status: 404,
+          body: { message: "Student not found" },
+        },
+      };
+    }
+
+    return { student: fallbackStudents[0], students: fallbackStudents };
+  }
+
+  return { student: students[0], students };
+};
+
 const parseMark = (value, fieldLabel) => {
   if (!isProvided(value)) return { hasValue: false, value: null };
   const parsed = Number(value);
@@ -717,109 +961,120 @@ export const getResultByClassRoll = async (req, res) => {
       return res.json(cachedResultPayload);
     }
 
-    const buildStudentQuery = () => {
-      let query = supabase
-        .from("students")
-        .select("*")
-        .eq("class", cls)
-        .eq("roll_no", Number(roll));
+    const studentResult = await resolveStudentForResult({
+      className: cls,
+      roll,
+      section,
+      academicYears: requestedAcademicYears,
+    });
 
-      if (section) {
-        query = query.eq("section", section);
-      }
-
-      return query;
-    };
-
-    const extractDistinctValues = (rows, key) =>
-      Array.from(
-        new Set(
-          (rows || [])
-            .map((row) => String(row?.[key] || "").trim())
-            .filter(Boolean)
-        )
-      );
-
-    let studentQuery = buildStudentQuery();
-    if (hasRequestedAcademicYear) {
-      studentQuery = studentQuery.in("academic_year", requestedAcademicYears);
-    }
-
-    const { data: students, error: studentError } = await studentQuery.limit(20);
-
-    if (studentError) {
-      return res.status(500).json({
-        message: "Failed to fetch student",
-        error: studentError.message,
-      });
-    }
-
-    if (!students?.length) {
-      if (hasRequestedAcademicYear) {
-        const { data: fallbackStudents } = await buildStudentQuery().limit(20);
-        const availableAcademicYears = extractDistinctValues(
-          fallbackStudents,
-          "academic_year"
-        );
-
-        return res.status(404).json({
-          message: `Student not found for academic_year "${requestedAcademicYearRaw}"`,
-          available_academic_years:
-            availableAcademicYears.length > 0 ? availableAcademicYears : undefined,
+    if (studentResult.error) {
+      if (
+        studentResult.error.status === 404 &&
+        hasRequestedAcademicYear
+      ) {
+        const fallbackStudentResult = await resolveStudentForResult({
+          className: cls,
+          roll,
+          section,
+          academicYears: [],
         });
-      }
 
-      return res.status(404).json({
-        message: "Student not found",
-      });
-    }
+        if (!fallbackStudentResult.error && fallbackStudentResult.students?.length) {
+          const availableAcademicYears = Array.from(
+            new Set(
+              fallbackStudentResult.students
+                .map((row) => String(row?.academic_year || "").trim())
+                .filter(Boolean)
+            )
+          );
 
-    let resolvedStudents = students;
-    if (!hasRequestedAcademicYear) {
-      const activeStudents = students.filter(
-        (row) => String(row?.status || "").toLowerCase() === "active"
-      );
-      if (activeStudents.length === 1) {
-        resolvedStudents = activeStudents;
-      }
-    }
-
-    if (resolvedStudents.length > 1) {
-      const availableSections = extractDistinctValues(resolvedStudents, "section");
-      if (!section && availableSections.length > 1) {
-        return res.status(409).json({
-          message: "Multiple students found for the same class and roll. Provide section.",
-          sections: availableSections,
-        });
-      }
-
-      if (!hasRequestedAcademicYear) {
-        const availableAcademicYears = extractDistinctValues(
-          resolvedStudents,
-          "academic_year"
-        );
-        if (availableAcademicYears.length > 1) {
-          return res.status(409).json({
-            message:
-              "Multiple students found across academic years. Provide academic_year.",
-            available_academic_years: availableAcademicYears,
+          return res.status(404).json({
+            message: `Student not found for academic_year "${requestedAcademicYearRaw}"`,
+            available_academic_years:
+              availableAcademicYears.length > 0 ? availableAcademicYears : undefined,
           });
         }
       }
+
+      return res.status(studentResult.error.status).json(studentResult.error.body);
     }
 
-    if (resolvedStudents.length > 1) {
-      return res.status(409).json({
-        message: "Multiple students found for the same class and roll. Provide section.",
-      });
+    let student = studentResult.student;
+    const candidateStudents = Array.isArray(studentResult.students)
+      ? studentResult.students
+      : [studentResult.student].filter(Boolean);
+
+    const findPublishedCandidate = async (candidates) => {
+      for (const candidate of candidates) {
+        const { data: candidateSummary, error: candidateError } = await supabase
+          .from("result_summary")
+          .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
+          .eq("student_id", candidate.id)
+          .eq("terminal", requestedTerminal)
+          .maybeSingle();
+
+        if (candidateError || !candidateSummary) continue;
+        if (normalizeMarkStatus(candidateSummary.status) === "PUBLISHED") {
+          return { student: candidate, publishedSummary: candidateSummary };
+        }
+      }
+
+      return null;
+    };
+
+    const publishedMatch = await findPublishedCandidate(candidateStudents);
+    if (publishedMatch) {
+      student = publishedMatch.student;
     }
 
-    const student = resolvedStudents[0];
+    if (!publishedMatch) {
+      const { data: publishedStudentRows, error: publishedStudentError } = await supabase
+        .from("result_summary")
+        .select(`
+          calculated_at,
+          status,
+          terminal,
+          students!inner (
+            id,
+            name,
+            class,
+            section,
+            roll_no,
+            academic_year,
+            status
+          )
+        `)
+        .eq("terminal", requestedTerminal)
+        .eq("status", "Published")
+        .eq("students.class", cls)
+        .eq("students.status", "active")
+        .eq("students.roll_no", Number(roll))
+        .limit(5);
 
-    if (!student) {
-      return res.status(404).json({
-        message: "Student not found",
-      });
+      if (!publishedStudentError && publishedStudentRows?.length) {
+        const candidateRow = publishedStudentRows.find((row) => {
+          const rowStudent = row?.students;
+          if (!rowStudent) return false;
+          if (section && String(rowStudent.section || "").trim() !== String(section).trim()) return false;
+          if (hasRequestedAcademicYear) {
+            return requestedAcademicYears.includes(String(rowStudent.academic_year || "").trim());
+          }
+          return true;
+        }) || publishedStudentRows[0];
+
+        if (candidateRow?.students) {
+          student = {
+            id: candidateRow.students.id,
+            name: candidateRow.students.name,
+            class: candidateRow.students.class,
+            section: candidateRow.students.section,
+            roll_no: candidateRow.students.roll_no,
+            academic_year: candidateRow.students.academic_year || null,
+            status: candidateRow.students.status || null,
+          };
+        }
+      }
     }
 
     const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
@@ -1153,7 +1408,7 @@ export const getResultByClassRoll = async (req, res) => {
  */
 export const submitMarks = async (req, res) => {
   try {
-    const { class: className, section, terminal, roll_no, marks } = req.body;
+    const { class: className, section, terminal, roll_no, marks, academic_year: academicYear } = req.body;
 
     // Validation
     if (!className || !section || !terminal || !roll_no || !marks || !Array.isArray(marks)) {
@@ -1162,20 +1417,17 @@ export const submitMarks = async (req, res) => {
       });
     }
 
-    // Find student by class, section, and roll_no
-    const { data: student, error: studentError } = await supabase
-      .from("students")
-      .select("id, name, class, section, roll_no")
-      .eq("class", className)
-      .eq("section", section)
-      .eq("roll_no", Number(roll_no))
-      .single();
+    const studentResult = await resolveStudentForSubmission({
+      className,
+      section,
+      roll_no,
+      academic_year: academicYear,
+    });
 
-    if (studentError || !student) {
-      return res.status(404).json({ 
-        message: "Student not found. Please check class, section, and roll number." 
-      });
+    if (studentResult.error) {
+      return res.status(studentResult.error.status).json(studentResult.error.body);
     }
+    const { student } = studentResult;
 
     // Get class subjects (prefer class+section, fallback to class-level)
     const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
@@ -1263,7 +1515,7 @@ export const submitMarks = async (req, res) => {
         // Skip - marks already exist in database, don't update via submit API
         skipped.push({
           subject: subject_name || subject_code,
-          message: "Marks already exist for this subject. Use PUT /api/marks/edit to update existing marks.",
+          message: "Marks already exist for this subject.",
         });
       } else {
         const normalizedMarks = validateAndNormalizeSubjectMarks({
@@ -1302,7 +1554,7 @@ export const submitMarks = async (req, res) => {
       return res.status(400).json({
         message: "No new marks to submit. All marks already exist for this student.",
         skipped: skipped,
-        note: "Use PUT /api/marks/edit to update existing marks.",
+        note: "Marks already exist for this student.",
       });
     }
 
@@ -1338,7 +1590,7 @@ export const submitMarks = async (req, res) => {
               // This one was already in DB, it's a duplicate
               duplicateSubjects.push({
                 subject: record._subject_name,
-                message: "Marks already exist for this subject. Use PUT /api/marks/edit to update existing marks.",
+                message: "Marks already exist for this subject.",
               });
             }
           });
@@ -1348,7 +1600,7 @@ export const submitMarks = async (req, res) => {
             message: "Some marks already exist in the database",
             error: "Duplicate key constraint violation",
             duplicate_subjects: duplicateSubjects,
-            note: "Use PUT /api/marks/edit to update existing marks.",
+            note: "Marks already exist for some subjects.",
           });
         }
         
@@ -1378,204 +1630,10 @@ export const submitMarks = async (req, res) => {
       terminal,
       marks_inserted: markRecords.length,
       skipped: skipped.length > 0 ? skipped : undefined,
-      note: skipped.length > 0 ? "Some marks were skipped because they already exist. Use PUT /api/marks/edit to update existing marks." : undefined,
+      note: skipped.length > 0 ? "Some marks were skipped because they already exist." : undefined,
     });
   } catch (err) {
     console.error("Submit marks error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
-    });
-  }
-};
-
-/**
- * Edit marks for a student (update existing marks only)
- * PUT /api/marks/edit
- * Body: { class, section, terminal, roll_no, marks: [{ subject_name/code, external_marks, internal_marks }] }
- */
-export const editMarks = async (req, res) => {
-  try {
-    const { class: className, section, terminal, roll_no, marks } = req.body;
-
-    // Validation
-    if (!className || !section || !terminal || !roll_no || !marks || !Array.isArray(marks)) {
-      return res.status(400).json({
-        message: "class, section, terminal, roll_no, and marks (array) are required",
-      });
-    }
-
-    // Find student by class, section, and roll_no
-    const { data: student, error: studentError } = await supabase
-      .from("students")
-      .select("id, name, class, section, roll_no")
-      .eq("class", className)
-      .eq("section", section)
-      .eq("roll_no", Number(roll_no))
-      .single();
-
-    if (studentError || !student) {
-      return res.status(404).json({ 
-        message: "Student not found. Please check class, section, and roll number." 
-      });
-    }
-
-    // Get class subjects (prefer class+section, fallback to class-level)
-    const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
-      className,
-      section
-    );
-
-    if (csError || !classSubjects?.length) {
-      return res.status(404).json({ 
-        message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}`,
-        note: "Add subjects to class using POST /api/subjects/add",
-      });
-    }
-
-    // Create subject map
-    const subjectMap = {};
-    classSubjects.forEach((cs) => {
-      const subject = cs.subjects;
-      if (!subject?.id) return;
-      const subjectDetails = {
-        id: subject.id,
-        name: subject.name,
-        code: subject.code,
-      };
-      subjectMap[String(subject.name || "").toLowerCase()] = subjectDetails;
-      subjectMap[String(subject.code || "").toLowerCase()] = subjectDetails;
-    });
-
-    // Get existing marks for this student and terminal
-    const { data: existingMarks, error: existingMarksError } = await supabase
-      .from("marks")
-      .select("id, subject_id, external_marks, internal_marks")
-      .eq("student_id", student.id)
-      .eq("terminal", terminal);
-
-    if (existingMarksError) {
-      return res.status(500).json({
-        message: "Failed to fetch existing marks",
-        error: existingMarksError.message,
-      });
-    }
-
-    const existingMarksMap = {};
-    if (existingMarks) {
-      existingMarks.forEach((m) => {
-        existingMarksMap[m.subject_id] = m;
-      });
-    }
-
-    // Update marks
-    const errors = [];
-    const updated = [];
-    const notFound = [];
-
-    for (const mark of marks) {
-      const { subject_name, subject_code, external_marks, internal_marks } = mark;
-
-      if (!subject_name && !subject_code) {
-        errors.push("Subject name or code is required for each mark");
-        continue;
-      }
-
-      const subjectKey = (subject_name || subject_code).toLowerCase();
-      const subjectRef = subjectMap[subjectKey];
-      const subject_id = subjectRef?.id;
-
-      if (!subject_id) {
-        errors.push(`Subject "${subject_name || subject_code}" not found for this class`);
-        continue;
-      }
-
-      // Check if marks exist for this subject
-      const existingMark = existingMarksMap[subject_id];
-      
-      if (!existingMark) {
-        notFound.push({
-          subject: subject_name || subject_code,
-          message: "Marks not found for this subject. Use POST /api/marks/submit to add new marks.",
-        });
-        continue;
-      }
-
-      const normalizedMarks = validateAndNormalizeSubjectMarks({
-        subject: subjectRef,
-        external_marks,
-        internal_marks,
-      });
-      if (normalizedMarks.error) {
-        errors.push(normalizedMarks.error);
-        continue;
-      }
-
-      // Update existing marks
-      const { data: updatedMark, error: updateError } = await supabase
-        .from("marks")
-        .update({
-          external_marks: normalizedMarks.external_marks,
-          internal_marks: normalizedMarks.internal_marks,
-          status: MARK_STATUS.SUBMITTED,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existingMark.id)
-        .select()
-        .single();
-
-      if (updateError) {
-        errors.push(`Failed to update marks for "${subject_name || subject_code}": ${updateError.message}`);
-      } else {
-        updated.push({
-          subject: subject_name || subject_code,
-          subject_id: subject_id,
-          external_marks: updatedMark.external_marks,
-          internal_marks: updatedMark.internal_marks,
-        });
-      }
-    }
-
-    if (errors.length > 0) {
-      return res.status(400).json({
-        message: "Validation errors",
-        errors,
-        updated: updated.length,
-        not_found: notFound,
-      });
-    }
-
-    if (updated.length === 0 && notFound.length > 0) {
-      return res.status(404).json({
-        message: "No marks found to update",
-        not_found: notFound,
-        note: "Use POST /api/marks/submit to add new marks.",
-      });
-    }
-
-    if (updated.length > 0) {
-      await invalidatePublishedResultForStudentTerminal(student.id, terminal);
-    }
-
-    invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
-
-    res.json({
-      success: true,
-      message: `Marks updated successfully for ${updated.length} subject(s)`,
-      student: {
-        id: student.id,
-        name: student.name,
-        class: student.class,
-        section: student.section,
-        roll_no: student.roll_no,
-      },
-      terminal,
-      updated: updated,
-      not_found: notFound.length > 0 ? notFound : undefined,
-      total_updated: updated.length,
-    });
-  } catch (err) {
-    console.error("Edit marks error:", err);
     res.status(500).json({ 
       message: "Server error",
       error: err.message 
@@ -1701,11 +1759,14 @@ export const publishResult = async (req, res) => {
       .map((cs) => cs.subject_id)
       .filter(Boolean);
 
+    const hasMarkedValues = (row) =>
+      isProvided(row?.external_marks) || isProvided(row?.internal_marks);
+
     const publishIssues = [];
     for (const student of activeStudents) {
       const { data: studentMarks, error: marksError } = await supabase
         .from("marks")
-        .select("subject_id, status")
+        .select("subject_id, status, external_marks, internal_marks")
         .eq("student_id", student.id)
         .eq("terminal", terminal)
         .in("subject_id", subjectIds);
@@ -1726,6 +1787,7 @@ export const publishResult = async (req, res) => {
 
       const missingSubjects = [];
       const nonSubmittedSubjects = [];
+      const rowsToNormalize = [];
 
       classSubjects.forEach((cs) => {
         const subject = cs.subjects;
@@ -1739,9 +1801,32 @@ export const publishResult = async (req, res) => {
         }
 
         if (!isSubmittedMark(markRow.status)) {
+          if (hasMarkedValues(markRow)) {
+            rowsToNormalize.push(markRow.subject_id);
+            return;
+          }
           nonSubmittedSubjects.push(subject.name);
         }
       });
+
+      if (rowsToNormalize.length > 0) {
+        const { error: normalizeError } = await supabase
+          .from("marks")
+          .update({
+            status: MARK_STATUS.SUBMITTED,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("student_id", student.id)
+          .eq("terminal", terminal)
+          .in("subject_id", rowsToNormalize);
+
+        if (normalizeError) {
+          return res.status(500).json({
+            message: `Failed to normalize submitted marks for ${student.name}`,
+            error: normalizeError.message,
+          });
+        }
+      }
 
       if (missingSubjects.length || nonSubmittedSubjects.length) {
         publishIssues.push({
