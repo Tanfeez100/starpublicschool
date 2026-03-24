@@ -2,7 +2,6 @@ import express from "express";
 import {
   getResultByClassRoll,
   submitMarks,
-  editMarks,
   publishResult,
   getMarks,
 } from "../controllers/marks.controller.js";
@@ -15,9 +14,6 @@ router.get("/", adminOrTeacher, getMarks);
 
 /* TEACHER - Submit Marks - Admin & Teacher can access */
 router.post("/submit", adminOrTeacher, submitMarks);
-
-/* EDIT MARKS - Update existing marks - Admin & Teacher can access */
-router.put("/edit", adminOrTeacher, editMarks);
 
 /* STUDENT / RESULT - PUBLIC (No middleware) - Students can view their result */
 router.get("/result", getResultByClassRoll);
