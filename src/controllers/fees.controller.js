@@ -1,6 +1,70 @@
 import { supabase } from "../services/supabase.js";
 import { getDues, getTotalPaid, getTotalFee, calculateAdvance } from "../utils/feeHelper.js";
 
+const toSafeString = (value) => String(value ?? "").trim();
+
+const normalizeClassToken = (value) =>
+  toSafeString(value)
+    .toUpperCase()
+    .replace(/\s+/g, " ")
+    .replace(/\./g, "");
+
+const resolveCurrentStudentForPayment = async ({
+  className,
+  rollNumber,
+  section,
+}) => {
+  const classToken = normalizeClassToken(className);
+  const rollToken = toSafeString(rollNumber);
+  const sectionToken = toSafeString(section);
+
+  let query = supabase
+    .from("students")
+    .select("id, class, section, roll_no, status, academic_year, created_at")
+    .eq("class", classToken)
+    .eq("roll_no", rollToken)
+    .eq("status", "active")
+    .order("academic_year", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (sectionToken) {
+    query = query.ilike("section", sectionToken);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    return { student: null, error };
+  }
+
+  if (data?.length) {
+    return { student: data[0], error: null };
+  }
+
+  // Fallback: if the active row is not found because section matching is stored
+  // differently, try a direct class/roll lookup and still prefer the latest row.
+  let fallbackQuery = supabase
+    .from("students")
+    .select("id, class, section, roll_no, status, academic_year, created_at")
+    .eq("class", classToken)
+    .eq("roll_no", rollToken)
+    .eq("status", "active")
+    .order("academic_year", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (sectionToken) {
+    fallbackQuery = fallbackQuery.eq("section", sectionToken);
+  }
+
+  const { data: fallbackData, error: fallbackError } = await fallbackQuery;
+  if (fallbackError) {
+    return { student: null, error: fallbackError };
+  }
+
+  return { student: fallbackData?.[0] || null, error: null };
+};
+
 /**
  * Close a month - handle dues for unpaid fees
  * POST /api/fees/close-month
@@ -443,15 +507,24 @@ export const payFee = async (req, res) => {
     if (!isFinite(amount) || amount <= 0) return res.status(400).json({ message: 'amount_paid must be a positive number' });
 
     // 1) Resolve student (class + roll_no + section)
-    const { data: student, error: studentErr } = await supabase
-      .from("students")
-      .select("id")
-      .eq("class", className)
-      .eq("roll_no", roll_number)
-      .eq("section", section)
-      .single();
+    const { student, error: studentErr } = await resolveCurrentStudentForPayment({
+      className,
+      rollNumber: roll_number,
+      section,
+    });
 
-    if (studentErr || !student) return res.status(404).json({ message: 'Student not found' });
+    if (studentErr) {
+      console.error("Failed to resolve student for payment:", studentErr);
+      return res.status(500).json({
+        message: "Failed to resolve student",
+        error: studentErr.message,
+      });
+    }
+
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
     const student_id = student.id;
 
     // 2) Resolve bill for the month (source-of-truth)
