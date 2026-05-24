@@ -171,6 +171,9 @@ const buildSubjectKey = (row, subjectMeta) => {
   return subjectName ? `name:${subjectName}` : `row:${row?.id || Math.random()}`;
 };
 
+const isPublishedSummary = (status) =>
+  String(status || "").trim().toUpperCase() === "PUBLISHED";
+
 const dedupeRowsByTermAndSubject = (rows, subjectMap) => {
   const map = new Map();
 
@@ -281,16 +284,44 @@ const fetchStudentByClassRoll = async ({
   section,
   academicYears,
 }) => {
+  const pickBestStudent = (rows = []) => {
+    if (!rows.length) return null;
+
+    const sorted = [...rows].sort((a, b) => {
+      const aStatus = String(a?.status || "").toLowerCase();
+      const bStatus = String(b?.status || "").toLowerCase();
+      if (aStatus !== bStatus) {
+        if (aStatus === "active") return -1;
+        if (bStatus === "active") return 1;
+      }
+
+      const aYear = String(a?.academic_year || "");
+      const bYear = String(b?.academic_year || "");
+      if (aYear !== bYear) return bYear.localeCompare(aYear);
+
+      const aCreated = new Date(a?.created_at || 0).getTime();
+      const bCreated = new Date(b?.created_at || 0).getTime();
+      if (aCreated !== bCreated) return bCreated - aCreated;
+
+      return String(a?.id || "").localeCompare(String(b?.id || ""));
+    });
+
+    return sorted[0];
+  };
+
   const runQuery = async (rollValue) => {
     let query = supabase
       .from("students")
-      .select("id, name, father_name, mother_name, class, section, roll_no, academic_year")
+      .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at")
       .eq("class", className)
       .eq("roll_no", rollValue)
+      .eq("status", "active")
+      .order("academic_year", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(5);
 
     if (section) {
-      query = query.eq("section", section);
+      query = query.ilike("section", section);
     }
 
     if (academicYears?.length) {
@@ -306,8 +337,26 @@ const fetchStudentByClassRoll = async ({
     throw new Error(`Failed to fetch student: ${numericError.message}`);
   }
 
-  if (numericData?.length) {
-    return numericData;
+    if (numericData?.length) {
+      return numericData;
+    }
+
+  const { data: numericFallbackData, error: numericFallbackError } = await supabase
+    .from("students")
+    .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at")
+    .eq("class", className)
+    .eq("roll_no", numericRoll)
+    .eq("status", "active")
+    .order("academic_year", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (numericFallbackError) {
+    throw new Error(`Failed to fetch student: ${numericFallbackError.message}`);
+  }
+
+  if (numericFallbackData?.length) {
+    return numericFallbackData;
   }
 
   const textRoll = toSafeString(rollNoInput);
@@ -320,7 +369,25 @@ const fetchStudentByClassRoll = async ({
     throw new Error(`Failed to fetch student: ${textError.message}`);
   }
 
-  return textData || [];
+  if (textData?.length) {
+    return textData;
+  }
+
+  const { data: textFallbackData, error: textFallbackError } = await supabase
+    .from("students")
+    .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at")
+    .eq("class", className)
+    .eq("roll_no", textRoll)
+    .eq("status", "active")
+    .order("academic_year", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (textFallbackError) {
+    throw new Error(`Failed to fetch student: ${textFallbackError.message}`);
+  }
+
+  return textFallbackData || [];
 };
 
 const fetchSubjectMap = async (subjectIds) => {
@@ -401,18 +468,106 @@ export const getResult = async (req, res) => {
       });
     }
 
-    if (students.length > 1) {
-      return res.status(409).json({
-        message: "Multiple students found for the same class and roll. Provide section.",
+    const currentTermLabel = TERM_DB_LABEL[normalizedTerm];
+
+    const findPublishedStudent = async (candidates) => {
+      for (const candidate of candidates) {
+        const { data: candidateSummary, error: candidateError } = await supabase
+          .from("result_summary")
+          .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
+          .eq("student_id", candidate.id)
+          .eq("terminal", currentTermLabel)
+          .maybeSingle();
+
+        if (candidateError || !candidateSummary) continue;
+        if (isPublishedSummary(candidateSummary.status)) {
+          return candidate;
+        }
+      }
+
+      return candidates[0];
+    };
+
+    const student = await findPublishedStudent(students);
+
+    let resolvedStudent = student;
+    if (!resolvedStudent) {
+      const { data: publishedStudentRows } = await supabase
+        .from("result_summary")
+        .select(`
+          calculated_at,
+          status,
+          terminal,
+          students!inner (
+            id,
+            name,
+            father_name,
+            mother_name,
+            class,
+            section,
+            roll_no,
+            academic_year,
+            status
+          )
+        `)
+        .eq("terminal", currentTermLabel)
+        .eq("status", "Published")
+        .eq("students.class", className)
+        .eq("students.status", "active")
+        .eq("students.roll_no", Number(rollInput))
+        .limit(5);
+
+      const fallbackMatch = (publishedStudentRows || []).find((row) => {
+        const rowStudent = row?.students;
+        if (!rowStudent) return false;
+        if (section && String(rowStudent.section || "").trim() !== String(section).trim()) return false;
+        if (academicYears?.length) {
+          return academicYears.includes(String(rowStudent.academic_year || "").trim());
+        }
+        return true;
+      });
+
+      if (fallbackMatch?.students) {
+        resolvedStudent = {
+          id: fallbackMatch.students.id,
+          name: fallbackMatch.students.name,
+          father_name: fallbackMatch.students.father_name || null,
+          mother_name: fallbackMatch.students.mother_name || null,
+          class: fallbackMatch.students.class,
+          section: fallbackMatch.students.section,
+          roll_no: fallbackMatch.students.roll_no,
+          academic_year: fallbackMatch.students.academic_year || null,
+          status: fallbackMatch.students.status || null,
+        };
+      }
+    }
+
+    const finalStudent = resolvedStudent;
+
+    const { data: publishedSummary, error: publishedError } = await supabase
+      .from("result_summary")
+      .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
+      .eq("student_id", finalStudent.id)
+      .eq("terminal", currentTermLabel)
+      .maybeSingle();
+
+    if (publishedError) {
+      return res.status(500).json({
+        message: "Failed to fetch published result",
+        error: publishedError.message,
       });
     }
 
-    const student = students[0];
+    if (!publishedSummary || !isPublishedSummary(publishedSummary.status)) {
+      return res.status(404).json({
+        message: "Result not published yet",
+      });
+    }
 
     const { data: rawMarks, error: marksError } = await supabase
       .from("marks")
       .select("*")
-      .eq("student_id", student.id);
+      .eq("student_id", finalStudent.id);
 
     if (marksError) {
       return res.status(500).json({
@@ -522,34 +677,36 @@ export const getResult = async (req, res) => {
 
     const roundedTotalObtained = Number(totalObtained.toFixed(2));
     const roundedTotalFullMarks = Number(totalFullMarks.toFixed(2));
-    const percentage =
-      roundedTotalFullMarks > 0
-        ? Number(((roundedTotalObtained / roundedTotalFullMarks) * 100).toFixed(2))
-        : 0;
-    const division = divisionFromPercentage(percentage);
-    const currentTermLabel = TERM_DB_LABEL[normalizedTerm];
+    const percentage = Number(
+      toNumberOrDefault(publishedSummary.percentage, 0).toFixed(2)
+    );
+    const division = publishedSummary.division || divisionFromPercentage(percentage);
 
     const studentDetails = {
-      id: student.id,
-      name: student.name,
-      fatherName: student.father_name || null,
-      motherName: student.mother_name || null,
-      class: student.class,
-      section: student.section || null,
-      rollNumber: student.roll_no,
-      academicYear: student.academic_year || null,
+      id: finalStudent.id,
+      name: finalStudent.name,
+      fatherName: finalStudent.father_name || null,
+      motherName: finalStudent.mother_name || null,
+      class: finalStudent.class,
+      section: finalStudent.section || null,
+      rollNumber: finalStudent.roll_no,
+      academicYear: finalStudent.academic_year || null,
       term: currentTermLabel,
     };
 
     const summary = {
-      totalObtained: roundedTotalObtained,
-      totalFullMarks: roundedTotalFullMarks,
+      totalObtained: Number(toNumberOrDefault(publishedSummary.total_obtained, roundedTotalObtained).toFixed(2)),
+      totalFullMarks: Number(toNumberOrDefault(publishedSummary.total_marks, roundedTotalFullMarks).toFixed(2)),
       percentage,
       division,
       // Backward-compatible aliases
-      total_obtained: roundedTotalObtained,
-      total_max_marks: roundedTotalFullMarks,
-      status: roundedTotalFullMarks > 0 ? "Published" : "Pending",
+      total_obtained: Number(toNumberOrDefault(publishedSummary.total_obtained, roundedTotalObtained).toFixed(2)),
+      total_max_marks: Number(toNumberOrDefault(publishedSummary.total_marks, roundedTotalFullMarks).toFixed(2)),
+      status: "Published",
+      rank: publishedSummary.rank ?? null,
+      published_date: publishedSummary.calculated_at
+        ? new Date(publishedSummary.calculated_at).toISOString().split("T")[0]
+        : null,
     };
 
     return res.json({
@@ -560,8 +717,8 @@ export const getResult = async (req, res) => {
       student: {
         id: studentDetails.id,
         name: studentDetails.name,
-        father_name: student.father_name || null,
-        mother_name: student.mother_name || null,
+        father_name: finalStudent.father_name || null,
+        mother_name: finalStudent.mother_name || null,
         class: studentDetails.class,
         section: studentDetails.section,
         roll_no: studentDetails.rollNumber,

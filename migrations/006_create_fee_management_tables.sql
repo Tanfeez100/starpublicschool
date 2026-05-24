@@ -107,10 +107,14 @@ CREATE INDEX IF NOT EXISTS idx_fee_payments_student_bill ON fee_payments(student
 CREATE TABLE IF NOT EXISTS previous_dues (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   student_id UUID NOT NULL,
-  amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  remaining_dues DECIMAL(10, 2) NOT NULL DEFAULT 0, -- Remaining dues amount
+  original_due DECIMAL(10, 2) DEFAULT 0, -- Original due amount
+  remaining_due DECIMAL(10, 2) DEFAULT 0, -- Remaining due tracking (legacy)
+  from_month VARCHAR(7), -- From which month (for tracking)
   month VARCHAR(7) NOT NULL, -- YYYY-MM format
   year INT NOT NULL,
   status VARCHAR(20) DEFAULT 'pending', -- pending/cleared
+  cleared BOOLEAN DEFAULT false, -- Whether cleared flag
   created_at TIMESTAMP DEFAULT now(),
   updated_at TIMESTAMP DEFAULT now(),
   
