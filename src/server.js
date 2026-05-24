@@ -11,6 +11,7 @@ import invoiceRoutes from "./routes/invoice.routes.js";
 import megaRoutes from "./routes/mega.routes.js";
 import promotionRoutes from "./routes/promotion.routes.js";
 import migrationRoutes from "./routes/migration.routes.js";
+import publicFeesRoutes from "./routes/publicFees.routes.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
 console.log(
@@ -31,6 +32,7 @@ app.use("/api/bills", billRoutes);
 app.use("/api/fee-structure", feeStructureRoutes);
 app.use("/api/fees", feesRoutes);
 app.use("/api/invoice", invoiceRoutes);
+app.use("/api/public-fees", publicFeesRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/migration", migrationRoutes);
 
