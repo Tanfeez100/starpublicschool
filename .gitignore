@@ -8,7 +8,7 @@ node_modules
 package-lock.json
 package.json
 
-
+/docss
 service-account.json
 
       BATCH_MIGRATION_GUIDE.md
@@ -24,3 +24,6 @@ service-account.json
         migrations/012_rename_amount_to_remaining_dues.sql
         run_migration_009.js
         run_migration_010.js
+
+gps_backend_complete_api.postman_collection.json
+postman_collections
