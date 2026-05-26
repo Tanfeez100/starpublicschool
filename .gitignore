@@ -4,6 +4,7 @@
 
 node_modules
 
+GPS-Backend/.env
 .env
 package-lock.json
 package.json
