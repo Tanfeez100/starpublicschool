@@ -1,5 +1,4 @@
-import crypto from "crypto";
-import Razorpay from "razorpay";
+import { randomUUID } from "crypto";
 import { supabase } from "../services/supabase.js";
 import { generateInvoicePDF } from "../services/pdfGenerator.js";
 import { sendReceiptOnWhatsApp } from "../services/whatsappService.js";
@@ -19,6 +18,74 @@ const normalizeSectionToken = (value) => normalizeLoose(value).replace(/[^a-z0-9
 const normalizeRollToken = (value) => {
   const digits = normalizeDigits(value);
   return digits ? String(Number.parseInt(digits, 10)) : normalizeLoose(value);
+};
+
+const amountsMatch = (a, b) => Math.abs(toAmount(a) - toAmount(b)) < 0.01;
+const sanitizeCashfreeOrderId = (value) =>
+  toSafeString(value).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 45);
+
+const getCashfreeMode = () => {
+  const configuredMode = normalizeLoose(process.env.CASHFREE_ENV || process.env.CASHFREE_MODE);
+  if (configuredMode) {
+    return configuredMode === "production" || configuredMode === "prod" ? "production" : "sandbox";
+  }
+
+  return toSafeString(process.env.CASHFREE_SECRET_KEY).includes("_prod_") ? "production" : "sandbox";
+};
+
+const getCashfreeBaseUrl = () =>
+  process.env.CASHFREE_BASE_URL ||
+  (getCashfreeMode() === "production"
+    ? "https://api.cashfree.com/pg"
+    : "https://sandbox.cashfree.com/pg");
+
+const getCashfreeCredentials = () => {
+  const clientId = process.env.CASHFREE_CLIENT_ID || process.env.CASHFREE_APP_ID;
+  const clientSecret = process.env.CASHFREE_CLIENT_SECRET || process.env.CASHFREE_SECRET_KEY;
+
+  if (!clientId || !clientSecret) {
+    throw new Error("Cashfree credentials are not configured");
+  }
+
+  return { clientId, clientSecret };
+};
+
+const cashfreeRequest = async (path, { method = "GET", body, idempotencyKey } = {}) => {
+  const { clientId, clientSecret } = getCashfreeCredentials();
+  const headers = {
+    "Content-Type": "application/json",
+    "x-api-version": process.env.CASHFREE_API_VERSION || "2025-01-01",
+    "x-client-id": clientId,
+    "x-client-secret": clientSecret,
+  };
+
+  if (idempotencyKey) {
+    headers["x-idempotency-key"] = idempotencyKey;
+  }
+
+  const response = await fetch(`${getCashfreeBaseUrl()}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text ? { message: text } : null;
+  }
+
+  if (!response.ok) {
+    const message = data?.message || data?.error_description || data?.error || "Cashfree request failed";
+    const error = new Error(message);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
 };
 
 const normalizeClassForCompare = (value) => {
@@ -42,17 +109,6 @@ const mobileMatches = (stored, submitted) => {
     storedDigits.endsWith(submittedDigits.slice(-10)) ||
     submittedDigits.endsWith(storedDigits.slice(-10))
   );
-};
-
-const getRazorpayClient = () => {
-  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-    throw new Error("Razorpay keys are not configured");
-  }
-
-  return new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-  });
 };
 
 const resolvePublicStudent = async ({ className, section, rollNumber, mobile }) => {
@@ -167,6 +223,154 @@ const enrichBill = async (bill) => {
   };
 };
 
+const getSuccessfulCashfreePayment = async (orderId, paymentId) => {
+  if (paymentId) {
+    return cashfreeRequest(
+      `/orders/${encodeURIComponent(orderId)}/payments/${encodeURIComponent(paymentId)}`
+    );
+  }
+
+  const payments = await cashfreeRequest(`/orders/${encodeURIComponent(orderId)}/payments`);
+  return (
+    (payments || []).find(
+      (payment) => payment.payment_status === "SUCCESS" && payment.is_captured !== false
+    ) ||
+    (payments || []).find((payment) => payment.payment_status === "PENDING") ||
+    null
+  );
+};
+
+const completeCapturedPublicPayment = async ({
+  req,
+  orderId,
+  paymentId,
+  billId,
+  mobile,
+}) => {
+  const [order, cashfreePayment] = await Promise.all([
+    cashfreeRequest(`/orders/${encodeURIComponent(orderId)}`),
+    getSuccessfulCashfreePayment(orderId, paymentId),
+  ]);
+
+  if (!cashfreePayment) {
+    return {
+      status: "pending",
+      message: "Payment is still pending",
+      order_status: order?.order_status || "ACTIVE",
+    };
+  }
+
+  if (order?.order_tags?.bill_id && order.order_tags.bill_id !== billId) {
+    return { status: "failed", message: "Payment order does not match this bill" };
+  }
+
+  if (cashfreePayment.order_id !== orderId) {
+    return { status: "failed", message: "Payment does not match this order" };
+  }
+
+  if (cashfreePayment.payment_status !== "SUCCESS" || cashfreePayment.is_captured === false) {
+    return {
+      status: "pending",
+      message: `Payment status is ${cashfreePayment.payment_status || order?.order_status || "pending"}`,
+      order_status: order?.order_status || "ACTIVE",
+    };
+  }
+
+  if (order?.order_status !== "PAID") {
+    return {
+      status: "pending",
+      message: `Order status is ${order?.order_status || "pending"}`,
+      order_status: order?.order_status || "ACTIVE",
+    };
+  }
+
+  if (cashfreePayment.payment_currency !== "INR" || order.order_currency !== "INR") {
+    return { status: "failed", message: "Payment currency mismatch" };
+  }
+
+  if (!amountsMatch(cashfreePayment.payment_amount, order.order_amount)) {
+    return { status: "failed", message: "Payment amount does not match the order amount" };
+  }
+
+  const { invoiceData, error } = await buildInvoiceData(billId);
+  if (error || !invoiceData) {
+    return { status: "failed", message: "Bill not found" };
+  }
+
+  if (!mobileMatches(invoiceData.student?.mobile, mobile)) {
+    return { status: "failed", message: "Mobile number does not match this bill" };
+  }
+
+  if (invoiceData.remaining > 0 && !amountsMatch(order.order_amount, invoiceData.remaining)) {
+    return { status: "failed", message: "Payment amount does not match current bill payable amount" };
+  }
+
+  const transactionId = String(cashfreePayment.cf_payment_id);
+  const existingPayment = await supabase
+    .from("fee_payments")
+    .select("*")
+    .eq("transaction_id", transactionId)
+    .maybeSingle();
+
+  let payment = existingPayment.data || null;
+
+  if (existingPayment.error && existingPayment.error.code !== "PGRST116") {
+    console.error("Existing public payment lookup failed:", existingPayment.error);
+  }
+
+  if (!payment) {
+    const amountPaid = toAmount(cashfreePayment.payment_amount || order.order_amount);
+    const { data: rpcData, error: rpcError } = await supabase.rpc("fn_process_payment", {
+      p_student_id: invoiceData.student.id,
+      p_bill_id: billId,
+      p_amount: amountPaid,
+      p_payment_mode: "online",
+      p_payment_date: new Date().toISOString().slice(0, 10),
+      p_month: invoiceData.month,
+      p_transaction_id: transactionId,
+    });
+
+    if (rpcError) {
+      console.error("Public payment RPC error:", rpcError);
+      return { status: "failed", message: rpcError.message || "Payment recording failed" };
+    }
+
+    payment = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+  }
+
+  const publicBaseUrl =
+    process.env.PUBLIC_BACKEND_URL || `${req.protocol}://${req.get("host")}`;
+  const receiptUrl = `${publicBaseUrl}/api/public-fees/receipt/${billId}?mobile=${encodeURIComponent(
+    mobile
+  )}`;
+
+  let whatsapp = { sent: false, skipped: true };
+  try {
+    whatsapp = await sendReceiptOnWhatsApp({
+      mobile,
+      studentName: invoiceData.student?.name,
+      receiptUrl,
+      invoiceNumber: invoiceData.invoice_number,
+      amount: toAmount(cashfreePayment.payment_amount || order.order_amount),
+    });
+  } catch (whatsappError) {
+    console.error("WhatsApp receipt send failed:", whatsappError);
+    whatsapp = { sent: false, error: whatsappError.message };
+  }
+
+  return {
+    status: "paid",
+    message: "Payment verified and recorded successfully",
+    payment,
+    gateway: "cashfree",
+    cashfree_order_id: orderId,
+    cashfree_payment_id: transactionId,
+    bill_id: billId,
+    receipt_url: receiptUrl,
+    whatsapp,
+  };
+};
+
 export const lookupPublicFees = async (req, res) => {
   try {
     const { class: className, section, roll_number, month, mobile } = req.body;
@@ -219,7 +423,7 @@ export const lookupPublicFees = async (req, res) => {
       },
       active_bill: activeBill,
       bills: enrichedBills,
-      razorpay_key_id: process.env.RAZORPAY_KEY_ID || "",
+      cashfree_mode: getCashfreeMode(),
     });
   } catch (error) {
     console.error("Public fee lookup error:", error);
@@ -248,29 +452,47 @@ export const createPublicFeeOrder = async (req, res) => {
       return res.status(400).json({ message: "This bill is already paid" });
     }
 
-    const razorpay = getRazorpayClient();
-    const amountInPaise = Math.round(invoiceData.remaining * 100);
-    const receipt = `GPS-${bill_id.slice(0, 8)}-${Date.now().toString().slice(-8)}`;
-    const order = await razorpay.orders.create({
-      amount: amountInPaise,
-      currency: "INR",
-      receipt,
-      notes: {
-        bill_id,
-        student_id: invoiceData.student?.id || "",
-        mobile: normalizeDigits(mobile).slice(-10),
+    const orderId = sanitizeCashfreeOrderId(`GPS_${bill_id.slice(0, 8)}_${Date.now()}`);
+    const publicFrontendUrl = process.env.PUBLIC_FRONTEND_URL || process.env.FRONTEND_URL || "";
+    const order = await cashfreeRequest("/orders", {
+      method: "POST",
+      idempotencyKey: randomUUID(),
+      body: {
+        order_id: orderId,
+        order_amount: Number(invoiceData.remaining.toFixed(2)),
+        order_currency: "INR",
+        customer_details: {
+          customer_id: sanitizeCashfreeOrderId(invoiceData.student?.id || bill_id),
+          customer_name: invoiceData.student?.name || "Student",
+          customer_phone: normalizeDigits(mobile).slice(-10),
+        },
+        order_meta: publicFrontendUrl
+          ? {
+              return_url: `${publicFrontendUrl.replace(/\/$/, "")}/pay-fees?cashfree_order_id={order_id}`,
+            }
+          : undefined,
+        order_note: `Fee payment ${invoiceData.month}`,
+        order_tags: {
+          bill_id,
+          student_id: invoiceData.student?.id || "",
+          month: invoiceData.month,
+          mobile: normalizeDigits(mobile).slice(-10),
+        },
       },
     });
 
     return res.json({
       message: "Payment order created",
+      gateway: "cashfree",
       order: {
-        id: order.id,
-        amount: order.amount,
-        currency: order.currency,
-        receipt: order.receipt,
+        id: order.order_id,
+        cf_order_id: order.cf_order_id,
+        amount: order.order_amount,
+        currency: order.order_currency,
+        status: order.order_status,
+        payment_session_id: order.payment_session_id,
       },
-      razorpay_key_id: process.env.RAZORPAY_KEY_ID,
+      cashfree_mode: getCashfreeMode(),
       student: invoiceData.student,
       bill: {
         bill_id,
@@ -287,97 +509,64 @@ export const createPublicFeeOrder = async (req, res) => {
 export const verifyPublicFeePayment = async (req, res) => {
   try {
     const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
+      cashfree_order_id,
+      cf_payment_id,
+      order_id,
+      payment_id,
       bill_id,
       mobile,
     } = req.body;
 
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !bill_id || !mobile) {
+    const cashfreeOrderId = cashfree_order_id || order_id;
+    const cashfreePaymentId = cf_payment_id || payment_id;
+
+    if (!cashfreeOrderId || !bill_id || !mobile) {
       return res.status(400).json({ message: "Missing payment verification fields" });
     }
 
-    const expectedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET || "")
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest("hex");
-
-    if (expectedSignature !== razorpay_signature) {
-      return res.status(400).json({ message: "Payment signature verification failed" });
-    }
-
-    const razorpay = getRazorpayClient();
-    const [order, razorpayPayment] = await Promise.all([
-      razorpay.orders.fetch(razorpay_order_id),
-      razorpay.payments.fetch(razorpay_payment_id),
-    ]);
-
-    if (order?.notes?.bill_id && order.notes.bill_id !== bill_id) {
-      return res.status(400).json({ message: "Payment order does not match this bill" });
-    }
-
-    if (razorpayPayment?.order_id !== razorpay_order_id || razorpayPayment?.status !== "captured") {
-      return res.status(400).json({ message: "Razorpay payment is not captured yet" });
-    }
-
-    const { invoiceData, error } = await buildInvoiceData(bill_id);
-    if (error || !invoiceData) {
-      return res.status(404).json({ message: "Bill not found" });
-    }
-
-    if (!mobileMatches(invoiceData.student?.mobile, mobile)) {
-      return res.status(403).json({ message: "Mobile number does not match this bill" });
-    }
-
-    const amountPaid = Number(razorpayPayment.amount || order.amount || 0) / 100;
-
-    const { data: rpcData, error: rpcError } = await supabase.rpc("fn_process_payment", {
-      p_student_id: invoiceData.student.id,
-      p_bill_id: bill_id,
-      p_amount: amountPaid,
-      p_payment_mode: "online",
-      p_payment_date: new Date().toISOString().slice(0, 10),
-      p_month: invoiceData.month,
-      p_transaction_id: razorpay_payment_id,
+    const result = await completeCapturedPublicPayment({
+      req,
+      orderId: cashfreeOrderId,
+      paymentId: cashfreePaymentId,
+      billId: bill_id,
+      mobile,
     });
 
-    if (rpcError) {
-      console.error("Public payment RPC error:", rpcError);
-      return res.status(400).json({ message: rpcError.message || "Payment recording failed" });
+    if (result.status === "failed") {
+      return res.status(400).json({ message: result.message });
     }
 
-    const payment = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-    const publicBaseUrl =
-      process.env.PUBLIC_BACKEND_URL || `${req.protocol}://${req.get("host")}`;
-    const receiptUrl = `${publicBaseUrl}/api/public-fees/receipt/${bill_id}?mobile=${encodeURIComponent(
-      mobile
-    )}`;
-
-    let whatsapp = { sent: false, skipped: true };
-    try {
-      whatsapp = await sendReceiptOnWhatsApp({
-        mobile,
-        studentName: invoiceData.student?.name,
-        receiptUrl,
-        invoiceNumber: invoiceData.invoice_number,
-        amount: amountPaid,
-      });
-    } catch (whatsappError) {
-      console.error("WhatsApp receipt send failed:", whatsappError);
-      whatsapp = { sent: false, error: whatsappError.message };
-    }
-
-    return res.json({
-      message: "Payment verified and recorded successfully",
-      payment,
-      bill_id,
-      receipt_url: receiptUrl,
-      whatsapp,
-    });
+    return res.json(result);
   } catch (error) {
     console.error("Verify public fee payment error:", error);
     return res.status(500).json({ message: "Failed to verify payment", error: error.message });
+  }
+};
+
+export const getPublicFeePaymentStatus = async (req, res) => {
+  try {
+    const { order_id } = req.params;
+    const { bill_id, mobile } = req.query;
+
+    if (!order_id || !bill_id || !mobile) {
+      return res.status(400).json({ message: "order_id, bill_id and mobile are required" });
+    }
+
+    const result = await completeCapturedPublicPayment({
+      req,
+      orderId: order_id,
+      billId: bill_id,
+      mobile,
+    });
+
+    if (result.status === "failed") {
+      return res.status(400).json({ message: result.message });
+    }
+
+    return res.json(result);
+  } catch (error) {
+    console.error("Public fee payment status error:", error);
+    return res.status(500).json({ message: "Failed to check payment status", error: error.message });
   }
 };
 
