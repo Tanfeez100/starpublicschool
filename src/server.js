@@ -1,3 +1,4 @@
+import "dotenv/config";
 import app from "./app.js";
 import authRoutes from "./routes/auth.routes.js";
 import studentsRoutes from "./routes/students.routes.js";
