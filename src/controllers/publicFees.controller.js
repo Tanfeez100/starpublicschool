@@ -113,6 +113,7 @@ const mobileMatches = (stored, submitted) => {
 
 const resolvePublicStudent = async ({ className, section, rollNumber, mobile }) => {
   const rollToken = normalizeRollToken(rollNumber);
+  const providedMobile = normalizeDigits(mobile);
 
   const { data, error } = await supabase
     .from("students")
@@ -123,14 +124,21 @@ const resolvePublicStudent = async ({ className, section, rollNumber, mobile }) 
 
   if (error) throw error;
 
-  return (
-    (data || []).find(
-      (student) =>
-        normalizeClassForCompare(student.class) === normalizeClassForCompare(className) &&
-        normalizeSectionToken(student.section) === normalizeSectionToken(section) &&
-        mobileMatches(student.mobile, mobile)
-    ) || null
+  const candidates = (data || []).filter(
+    (student) =>
+      normalizeClassForCompare(student.class) === normalizeClassForCompare(className) &&
+      normalizeSectionToken(student.section) === normalizeSectionToken(section)
   );
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  if (providedMobile) {
+    return candidates.find((student) => mobileMatches(student.mobile, mobile)) || null;
+  }
+
+  return candidates[0] || null;
 };
 
 const buildInvoiceData = async (billId) => {
@@ -146,7 +154,9 @@ const buildInvoiceData = async (billId) => {
         roll_no,
         class,
         section,
-        mobile
+        mobile,
+        aadhaar_card,
+        photo_url
       )
     `
     )
@@ -297,7 +307,7 @@ const completeCapturedPublicPayment = async ({
     return { status: "failed", message: "Bill not found" };
   }
 
-  if (!mobileMatches(invoiceData.student?.mobile, mobile)) {
+  if (normalizeDigits(mobile) && !mobileMatches(invoiceData.student?.mobile, mobile)) {
     return { status: "failed", message: "Mobile number does not match this bill" };
   }
 
@@ -340,22 +350,24 @@ const completeCapturedPublicPayment = async ({
 
   const publicBaseUrl =
     process.env.PUBLIC_BACKEND_URL || `${req.protocol}://${req.get("host")}`;
-  const receiptUrl = `${publicBaseUrl}/api/public-fees/receipt/${billId}?mobile=${encodeURIComponent(
-    mobile
-  )}`;
+  const receiptUrl = `${publicBaseUrl}/api/public-fees/receipt/${billId}${
+    mobile ? `?mobile=${encodeURIComponent(mobile)}` : ""
+  }`;
 
   let whatsapp = { sent: false, skipped: true };
-  try {
-    whatsapp = await sendReceiptOnWhatsApp({
-      mobile,
-      studentName: invoiceData.student?.name,
-      receiptUrl,
-      invoiceNumber: invoiceData.invoice_number,
-      amount: toAmount(cashfreePayment.payment_amount || order.order_amount),
-    });
-  } catch (whatsappError) {
-    console.error("WhatsApp receipt send failed:", whatsappError);
-    whatsapp = { sent: false, error: whatsappError.message };
+  if (normalizeDigits(mobile)) {
+    try {
+      whatsapp = await sendReceiptOnWhatsApp({
+        mobile,
+        studentName: invoiceData.student?.name,
+        receiptUrl,
+        invoiceNumber: invoiceData.invoice_number,
+        amount: toAmount(cashfreePayment.payment_amount || order.order_amount),
+      });
+    } catch (whatsappError) {
+      console.error("WhatsApp receipt send failed:", whatsappError);
+      whatsapp = { sent: false, error: whatsappError.message };
+    }
   }
 
   return {
@@ -375,9 +387,9 @@ export const lookupPublicFees = async (req, res) => {
   try {
     const { class: className, section, roll_number, month, mobile } = req.body;
 
-    if (!className || !section || !roll_number || !month || !mobile) {
+    if (!className || !section || !roll_number || !month) {
       return res.status(400).json({
-        message: "class, section, roll_number, month and mobile are required",
+        message: "class, section, roll_number and month are required",
       });
     }
 
@@ -394,7 +406,8 @@ export const lookupPublicFees = async (req, res) => {
 
     if (!student) {
       return res.status(404).json({
-        message: "Student not found. Please check class, roll, section and mobile number.",
+        message:
+          "Student not found. Please check class, roll, section and mobile number (if provided).",
       });
     }
 
@@ -435,8 +448,8 @@ export const createPublicFeeOrder = async (req, res) => {
   try {
     const { bill_id, mobile } = req.body;
 
-    if (!bill_id || !mobile) {
-      return res.status(400).json({ message: "bill_id and mobile are required" });
+    if (!bill_id) {
+      return res.status(400).json({ message: "bill_id is required" });
     }
 
     const { invoiceData, error } = await buildInvoiceData(bill_id);
@@ -444,7 +457,8 @@ export const createPublicFeeOrder = async (req, res) => {
       return res.status(404).json({ message: "Bill not found" });
     }
 
-    if (!mobileMatches(invoiceData.student?.mobile, mobile)) {
+    const normalizedMobile = normalizeDigits(mobile);
+    if (normalizedMobile && !mobileMatches(invoiceData.student?.mobile, mobile)) {
       return res.status(403).json({ message: "Mobile number does not match this bill" });
     }
 
@@ -454,31 +468,41 @@ export const createPublicFeeOrder = async (req, res) => {
 
     const orderId = sanitizeCashfreeOrderId(`GPS_${bill_id.slice(0, 8)}_${Date.now()}`);
     const publicFrontendUrl = process.env.PUBLIC_FRONTEND_URL || process.env.FRONTEND_URL || "";
+
+    const customerDetails = {
+      customer_id: sanitizeCashfreeOrderId(invoiceData.student?.id || bill_id),
+      customer_name: invoiceData.student?.name || "Student",
+    };
+    if (normalizedMobile) {
+      customerDetails.customer_phone = normalizedMobile.slice(-10);
+    }
+
+    const orderBody = {
+      order_id: orderId,
+      order_amount: Number(invoiceData.remaining.toFixed(2)),
+      order_currency: "INR",
+      customer_details: customerDetails,
+      order_meta: publicFrontendUrl
+        ? {
+            return_url: `${publicFrontendUrl.replace(/\/$/, "")}/pay-fees?cashfree_order_id={order_id}`,
+          }
+        : undefined,
+      order_note: `Fee payment ${invoiceData.month}`,
+      order_tags: {
+        bill_id,
+        student_id: invoiceData.student?.id || "",
+        month: invoiceData.month,
+      },
+    };
+
+    if (normalizedMobile) {
+      orderBody.order_tags.mobile = normalizedMobile.slice(-10);
+    }
+
     const order = await cashfreeRequest("/orders", {
       method: "POST",
       idempotencyKey: randomUUID(),
-      body: {
-        order_id: orderId,
-        order_amount: Number(invoiceData.remaining.toFixed(2)),
-        order_currency: "INR",
-        customer_details: {
-          customer_id: sanitizeCashfreeOrderId(invoiceData.student?.id || bill_id),
-          customer_name: invoiceData.student?.name || "Student",
-          customer_phone: normalizeDigits(mobile).slice(-10),
-        },
-        order_meta: publicFrontendUrl
-          ? {
-              return_url: `${publicFrontendUrl.replace(/\/$/, "")}/pay-fees?cashfree_order_id={order_id}`,
-            }
-          : undefined,
-        order_note: `Fee payment ${invoiceData.month}`,
-        order_tags: {
-          bill_id,
-          student_id: invoiceData.student?.id || "",
-          month: invoiceData.month,
-          mobile: normalizeDigits(mobile).slice(-10),
-        },
-      },
+      body: orderBody,
     });
 
     return res.json({
@@ -520,7 +544,7 @@ export const verifyPublicFeePayment = async (req, res) => {
     const cashfreeOrderId = cashfree_order_id || order_id;
     const cashfreePaymentId = cf_payment_id || payment_id;
 
-    if (!cashfreeOrderId || !bill_id || !mobile) {
+    if (!cashfreeOrderId || !bill_id) {
       return res.status(400).json({ message: "Missing payment verification fields" });
     }
 
@@ -548,8 +572,8 @@ export const getPublicFeePaymentStatus = async (req, res) => {
     const { order_id } = req.params;
     const { bill_id, mobile } = req.query;
 
-    if (!order_id || !bill_id || !mobile) {
-      return res.status(400).json({ message: "order_id, bill_id and mobile are required" });
+    if (!order_id || !bill_id) {
+      return res.status(400).json({ message: "order_id and bill_id are required" });
     }
 
     const result = await completeCapturedPublicPayment({
@@ -575,8 +599,8 @@ export const downloadPublicReceipt = async (req, res) => {
     const { bill_id } = req.params;
     const { mobile } = req.query;
 
-    if (!bill_id || !mobile) {
-      return res.status(400).json({ message: "bill_id and mobile are required" });
+    if (!bill_id) {
+      return res.status(400).json({ message: "bill_id is required" });
     }
 
     const { invoiceData, error } = await buildInvoiceData(bill_id);
@@ -584,7 +608,7 @@ export const downloadPublicReceipt = async (req, res) => {
       return res.status(404).json({ message: "Bill not found" });
     }
 
-    if (!mobileMatches(invoiceData.student?.mobile, mobile)) {
+    if (normalizeDigits(mobile) && !mobileMatches(invoiceData.student?.mobile, mobile)) {
       return res.status(403).json({ message: "Mobile number does not match this bill" });
     }
 

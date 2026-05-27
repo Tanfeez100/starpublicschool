@@ -1,5 +1,6 @@
 import { getMegaFolderPath, parseBoolean } from "../config/mega.js";
 import { ensureMegaFolder, getMegaStorage } from "../services/megaStorage.js";
+import { v2 as cloudinary } from 'cloudinary'
 
 function pickUploadedFile(req) {
   if (req.file) return req.file;
@@ -51,9 +52,53 @@ async function findMegaFileByNodeId(storage, nodeId) {
   return all.find((f) => f?.nodeId === nodeId) || null;
 }
 
+function getMissingCloudinaryConfig() {
+  const missing = [];
+  if (!process.env.CLOUDINARY_CLOUD_NAME) missing.push("CLOUDINARY_CLOUD_NAME");
+  if (!process.env.CLOUDINARY_API_KEY) missing.push("CLOUDINARY_API_KEY");
+  if (!process.env.CLOUDINARY_API_SECRET) missing.push("CLOUDINARY_API_SECRET");
+  return missing;
+}
+
+function configureCloudinary() {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+}
+
+function isStudentPhotoPreset(req) {
+  const preset = String(req.query.preset || req.query.type || "").trim().toLowerCase();
+  return ["student-photo", "student_photo", "passport", "passport-photo"].includes(preset);
+}
+
+function buildCloudinaryUploadOptions({ folderForCloud, studentPhoto = false }) {
+  const options = {
+    folder: folderForCloud,
+    resource_type: "image",
+  };
+
+  if (studentPhoto) {
+    options.eager = [
+      {
+        width: 318,
+        height: 414,
+        crop: "fill",
+        gravity: "face",
+        quality: "auto",
+      },
+    ];
+    options.eager_async = false;
+  }
+
+  return options;
+}
+
 export async function uploadSingleImage(req, res) {
   try {
     const isPublic = parseBoolean(req.query.public, false);
+    const provider = String(req.query.provider || '').toLowerCase()
 
     const file = pickUploadedFile(req);
     if (!file) {
@@ -64,10 +109,51 @@ export async function uploadSingleImage(req, res) {
       });
     }
 
-    const storage = await getMegaStorage();
     const folderPath = getMegaFolderPath({ isPublic });
-    const folder = await ensureMegaFolder(storage, folderPath);
 
+    // If Cloudinary requested, upload to Cloudinary instead
+    if (provider === 'cloudinary') {
+      // Fail fast if Cloudinary credentials are missing
+      const missing = getMissingCloudinaryConfig();
+      if (missing.length) {
+        return res.status(500).json({
+          success: false,
+          message: 'Cloudinary upload requested but Cloudinary credentials are not configured in .env',
+          missing: missing,
+          hint: 'Set the required variables in .env or remove provider=cloudinary from the request',
+        })
+      }
+
+      // Configure cloudinary from env
+      configureCloudinary();
+
+      const dataUri = `data:${file.mimetype || 'application/octet-stream'};base64,${file.buffer.toString('base64')}`
+      const folderForCloud = folderPath.join('/') || undefined
+      const studentPhoto = isStudentPhotoPreset(req);
+      const cloudResp = await cloudinary.uploader.upload(
+        dataUri,
+        buildCloudinaryUploadOptions({ folderForCloud, studentPhoto })
+      )
+      const transformedUrl = studentPhoto ? cloudResp.eager?.[0]?.secure_url : null;
+
+      return res.status(201).json({
+        success: true,
+        public: isPublic,
+        provider: 'cloudinary',
+        folderPathUsed: folderPath.join('/'),
+        file: {
+          name: cloudResp.original_filename || cloudResp.public_id,
+          size: file.size,
+          public_id: cloudResp.public_id,
+          url: transformedUrl || cloudResp.secure_url,
+          original_url: cloudResp.secure_url,
+          transformed: Boolean(transformedUrl),
+        },
+      })
+    }
+
+    const storage = await getMegaStorage();
+    const folder = await ensureMegaFolder(storage, folderPath);
     const uploadStream = folder.upload(
       { name: file.originalname || `upload-${Date.now()}`, size: file.size },
       file.buffer
@@ -89,11 +175,17 @@ export async function uploadSingleImage(req, res) {
     });
   } catch (err) {
     const e = normalizeMegaError(err);
+    const provider = String(req.query.provider || "").toLowerCase();
+    const isCloudinary = provider === "cloudinary";
     return res.status(e.status).json({
       success: false,
-      message: "Failed to upload image to MEGA",
+      message: isCloudinary
+        ? "Failed to upload image to Cloudinary"
+        : "Failed to upload image to MEGA",
       error: e.message,
-      hint: "Check MEGA_EMAIL / MEGA_PASSWORD in .env and ensure the account has available storage.",
+      hint: isCloudinary
+        ? "Check CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET in .env."
+        : "Check MEGA_EMAIL / MEGA_PASSWORD in .env and ensure the account has available storage.",
     });
   }
 }
@@ -101,6 +193,7 @@ export async function uploadSingleImage(req, res) {
 export async function uploadBulkImages(req, res) {
   try {
     const isPublic = parseBoolean(req.query.public, false);
+    const provider = String(req.query.provider || '').toLowerCase()
 
     const files = pickUploadedFiles(req);
     if (!files.length) {
@@ -112,10 +205,47 @@ export async function uploadBulkImages(req, res) {
       });
     }
 
-    const storage = await getMegaStorage();
     const folderPath = getMegaFolderPath({ isPublic });
-    const folder = await ensureMegaFolder(storage, folderPath);
 
+    // Cloudinary bulk upload path
+    if (provider === 'cloudinary') {
+      const missing = getMissingCloudinaryConfig();
+      if (missing.length) {
+        return res.status(500).json({
+          success: false,
+          message: 'Cloudinary upload requested but Cloudinary credentials are not configured in .env',
+          missing: missing,
+          hint: 'Set the required variables in .env or remove provider=cloudinary from the request',
+        })
+      }
+
+      configureCloudinary();
+
+      const results = [];
+      const folderForCloud = folderPath.join('/') || undefined
+      for (const f of files) {
+        const dataUri = `data:${f.mimetype || 'application/octet-stream'};base64,${f.buffer.toString('base64')}`
+        const cloudResp = await cloudinary.uploader.upload(dataUri, { folder: folderForCloud, resource_type: 'image' })
+        results.push({
+          name: cloudResp.original_filename || cloudResp.public_id,
+          size: f.size,
+          public_id: cloudResp.public_id,
+          url: cloudResp.secure_url,
+        })
+      }
+
+      return res.status(201).json({
+        success: true,
+        public: isPublic,
+        provider: 'cloudinary',
+        folderPathUsed: folderPath.join('/'),
+        count: results.length,
+        files: results,
+      })
+    }
+
+    const storage = await getMegaStorage();
+    const folder = await ensureMegaFolder(storage, folderPath);
     const results = [];
     for (const f of files) {
       const uploadStream = folder.upload(
@@ -141,11 +271,17 @@ export async function uploadBulkImages(req, res) {
     });
   } catch (err) {
     const e = normalizeMegaError(err);
+    const provider = String(req.query.provider || "").toLowerCase();
+    const isCloudinary = provider === "cloudinary";
     return res.status(e.status).json({
       success: false,
-      message: "Failed to upload images to MEGA",
+      message: isCloudinary
+        ? "Failed to upload images to Cloudinary"
+        : "Failed to upload images to MEGA",
       error: e.message,
-      hint: "Check MEGA_EMAIL / MEGA_PASSWORD in .env and ensure the account has available storage.",
+      hint: isCloudinary
+        ? "Check CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET in .env."
+        : "Check MEGA_EMAIL / MEGA_PASSWORD in .env and ensure the account has available storage.",
     });
   }
 }

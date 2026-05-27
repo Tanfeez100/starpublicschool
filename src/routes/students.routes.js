@@ -95,6 +95,23 @@ const normalizeDateOnly = (value, { required = false, field = "date" } = {}) => 
   return dt.toISOString().split("T")[0];
 };
 
+const normalizeAadhaarCard = (value, { required = false } = {}) => {
+  const normalized = sanitizeString(value);
+  if (!normalized) {
+    if (required) {
+      throw new Error("aadhaar_card is required");
+    }
+    return null;
+  }
+
+  const digits = String(normalized).replace(/\D/g, "");
+  if (!/^\d{12}$/.test(digits)) {
+    throw new Error("aadhaar_card must be a 12 digit number");
+  }
+
+  return digits;
+};
+
 const buildRollConflictMessage = (className, section, academicYear, rollNo) =>
   `Roll ${rollNo} is already assigned to an active student in class "${className}", section "${section}", academic year "${academicYear}"`;
 
@@ -160,7 +177,7 @@ router.get("/all", adminOrTeacher, async (req, res) => {
     let query = supabase
       .from("students")
       .select(
-        "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge"
+        "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge, aadhaar_card, photo_url"
       )
       .order("class", { ascending: true })
       .order("section", { ascending: true })
@@ -198,6 +215,8 @@ router.get("/all", adminOrTeacher, async (req, res) => {
       Status: student.status || "",
       LeftDate: student.left_date || "",
       Mobile: student.mobile || "",
+      Aadhaar: student.aadhaar_card || "",
+      PhotoUrl: student.photo_url || "",
       Address: student.address || "",
       Transport: student.uses_transport
         ? student.transport_charge || "Yes"
@@ -293,7 +312,7 @@ router.get("/", adminOrTeacher, async (req, res) => {
     let query = supabase
       .from("students")
       .select(
-        "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport"
+        "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport, aadhaar_card, photo_url"
       )
       .eq("class", String(cls).trim())
       .order("roll_no");
@@ -385,6 +404,8 @@ router.post("/add", adminOnly, async (req, res) => {
       address,
       uses_transport,
       transport_charge,
+      aadhaar_card,
+      photo_url,
     } = req.body;
 
     const cls = sanitizeString(clsRaw);
@@ -413,6 +434,7 @@ router.post("/add", adminOnly, async (req, res) => {
     }
 
     const normalizedUsesTransport = normalizeOptionalTransport(uses_transport);
+    const normalizedAadhaar = normalizeAadhaarCard(aadhaar_card, { required: true });
 
     const { data, error } = await supabase
       .from("students")
@@ -429,6 +451,8 @@ router.post("/add", adminOnly, async (req, res) => {
           status: STUDENT_STATUS.ACTIVE,
           left_date: null,
           mobile: sanitizeString(mobile),
+          aadhaar_card: normalizedAadhaar,
+          photo_url: sanitizeString(photo_url) || null,
           address: sanitizeString(address),
           uses_transport: normalizedUsesTransport ?? false,
           transport_charge:
@@ -484,6 +508,8 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
       gender,
       mobile,
       address,
+      aadhaar_card,
+      photo_url,
       class: clsRaw,
       roll_no: rollNoRaw,
       section: sectionRaw,
@@ -586,6 +612,8 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
     if (gender !== undefined) updateData.gender = sanitizeString(gender);
     if (mobile !== undefined) updateData.mobile = sanitizeString(mobile);
     if (address !== undefined) updateData.address = sanitizeString(address);
+    if (aadhaar_card !== undefined) updateData.aadhaar_card = normalizeAadhaarCard(aadhaar_card);
+    if (photo_url !== undefined) updateData.photo_url = sanitizeString(photo_url) || null;
 
     const normalizedUsesTransport = normalizeOptionalTransport(uses_transport);
     if (typeof normalizedUsesTransport !== "undefined") {

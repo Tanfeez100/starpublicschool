@@ -98,7 +98,7 @@ const MAX_READ_CACHE_ITEMS = toPositiveInt(
   300
 );
 const RESULT_TERMINAL_LABELS = ["First", "Second", "Third", "Annual"];
-const RESULT_BY_ROLL_RESPONSE_VERSION = "v2";
+const RESULT_BY_ROLL_RESPONSE_VERSION = "v3";
 const MARK_STATUS = {
   PENDING: "PENDING",
   SUBMITTED: "SUBMITTED",
@@ -424,8 +424,8 @@ const resolveStudentForResult = async ({
       .from("students")
       .select(
         includeStatus
-          ? "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at"
-          : "id, name, father_name, mother_name, class, section, roll_no, academic_year, created_at"
+          ? "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, photo_url, created_at"
+          : "id, name, father_name, mother_name, class, section, roll_no, academic_year, photo_url, created_at"
       )
       .eq("class", normalizedClass)
       .eq("roll_no", normalizedRoll);
@@ -455,6 +455,7 @@ const resolveStudentForResult = async ({
     roll_no: student.roll_no,
     academic_year: student.academic_year || null,
     status: student.status || null,
+    photo_url: student.photo_url || null,
   });
 
   let queryResult = await buildQuery(true);
@@ -828,6 +829,7 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
         class: student.class,
         roll_no: student.roll_no,
         section: student.section,
+        photo_url: student.photo_url || null,
       },
       terminal: "All",
       terminals: allResults,
@@ -1042,7 +1044,8 @@ export const getResultByClassRoll = async (req, res) => {
             section,
             roll_no,
             academic_year,
-            status
+            status,
+            photo_url
           )
         `)
         .eq("terminal", requestedTerminal)
@@ -1072,6 +1075,7 @@ export const getResultByClassRoll = async (req, res) => {
             roll_no: candidateRow.students.roll_no,
             academic_year: candidateRow.students.academic_year || null,
             status: candidateRow.students.status || null,
+            photo_url: candidateRow.students.photo_url || null,
           };
         }
       }
@@ -1361,6 +1365,7 @@ export const getResultByClassRoll = async (req, res) => {
           roll_no: student.roll_no,
           section: student.section,
           academic_year: student.academic_year || requestedAcademicYearRaw || null,
+          photo_url: student.photo_url || null,
         },
         terminal: terminalLabel,
         resolved_terminal: terminalLabel === "Annual" ? terminalLabel : undefined,
