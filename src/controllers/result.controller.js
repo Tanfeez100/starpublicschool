@@ -312,7 +312,7 @@ const fetchStudentByClassRoll = async ({
   const runQuery = async (rollValue) => {
     let query = supabase
       .from("students")
-      .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at")
+      .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at, photo_url")
       .eq("class", className)
       .eq("roll_no", rollValue)
       .eq("status", "active")
@@ -343,7 +343,7 @@ const fetchStudentByClassRoll = async ({
 
   const { data: numericFallbackData, error: numericFallbackError } = await supabase
     .from("students")
-    .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at")
+    .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at, photo_url")
     .eq("class", className)
     .eq("roll_no", numericRoll)
     .eq("status", "active")
@@ -375,7 +375,7 @@ const fetchStudentByClassRoll = async ({
 
   const { data: textFallbackData, error: textFallbackError } = await supabase
     .from("students")
-    .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at")
+    .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at, photo_url")
     .eq("class", className)
     .eq("roll_no", textRoll)
     .eq("status", "active")
@@ -507,7 +507,8 @@ export const getResult = async (req, res) => {
             section,
             roll_no,
             academic_year,
-            status
+            status,
+            photo_url
           )
         `)
         .eq("terminal", currentTermLabel)
@@ -538,6 +539,7 @@ export const getResult = async (req, res) => {
           roll_no: fallbackMatch.students.roll_no,
           academic_year: fallbackMatch.students.academic_year || null,
           status: fallbackMatch.students.status || null,
+          photo_url: fallbackMatch.students.photo_url || null,
         };
       }
     }
@@ -691,6 +693,7 @@ export const getResult = async (req, res) => {
       section: finalStudent.section || null,
       rollNumber: finalStudent.roll_no,
       academicYear: finalStudent.academic_year || null,
+      photoUrl: finalStudent.photo_url || null,
       term: currentTermLabel,
     };
 
@@ -723,6 +726,9 @@ export const getResult = async (req, res) => {
         section: studentDetails.section,
         roll_no: studentDetails.rollNumber,
         academic_year: studentDetails.academicYear,
+        photo_url: studentDetails.photoUrl,
+        PhotoUrl: studentDetails.photoUrl,
+        photo: studentDetails.photoUrl,
       },
       terminal: currentTermLabel,
       marks: marksDetails,

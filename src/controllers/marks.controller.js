@@ -485,7 +485,7 @@ const resolveStudentForResult = async ({
     let fallbackQuery = supabase
       .from("students")
       .select(
-        "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at"
+        "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, photo_url, created_at"
       )
       .eq("class", normalizedClass)
       .eq("roll_no", normalizedRoll)
@@ -830,6 +830,8 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
         roll_no: student.roll_no,
         section: student.section,
         photo_url: student.photo_url || null,
+        PhotoUrl: student.photo_url || null,
+        photo: student.photo_url || null,
       },
       terminal: "All",
       terminals: allResults,
@@ -1363,10 +1365,12 @@ export const getResultByClassRoll = async (req, res) => {
           mother_name: student.mother_name || null,
           class: student.class,
           roll_no: student.roll_no,
-          section: student.section,
-          academic_year: student.academic_year || requestedAcademicYearRaw || null,
-          photo_url: student.photo_url || null,
-        },
+        section: student.section,
+        academic_year: student.academic_year || requestedAcademicYearRaw || null,
+        photo_url: student.photo_url || null,
+        PhotoUrl: student.photo_url || null,
+        photo: student.photo_url || null,
+      },
         terminal: terminalLabel,
         resolved_terminal: terminalLabel === "Annual" ? terminalLabel : undefined,
         marks: buildMarksDetailsForTerminal(terminalLabel),
