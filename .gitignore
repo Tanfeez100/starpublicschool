@@ -6,6 +6,7 @@ node_modules
 
 GPS-Backend/.env
 .env
+.git_tracked_files.txt
 package-lock.json
 package.json
 
