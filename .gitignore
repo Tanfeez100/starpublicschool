@@ -27,4 +27,5 @@ service-account.json
         run_migration_010.js
 
 gps_backend_complete_api.postman_collection.json
-postman_collections
+Postman_Collection.json
+GPS_Backend_Complete_API_Collection.json

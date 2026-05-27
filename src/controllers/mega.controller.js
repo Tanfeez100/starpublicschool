@@ -73,6 +73,17 @@ function isStudentPhotoPreset(req) {
   return ["student-photo", "student_photo", "passport", "passport-photo"].includes(preset);
 }
 
+function isManualStudentPhotoPreset(req) {
+  const preset = String(req.query.preset || req.query.type || "").trim().toLowerCase();
+  return ["student-photo-manual", "student_photo_manual", "passport-manual", "manual-passport"].includes(preset);
+}
+
+function buildCloudinaryDeliveryUrl(url, transform) {
+  const rawUrl = String(url || "");
+  if (!rawUrl || !rawUrl.includes("/image/upload/")) return rawUrl;
+  return rawUrl.replace("/image/upload/", `/image/upload/${transform}/`);
+}
+
 function buildCloudinaryUploadOptions({ folderForCloud, studentPhoto = false }) {
   const options = {
     folder: folderForCloud,
@@ -130,11 +141,15 @@ export async function uploadSingleImage(req, res) {
       const dataUri = `data:${file.mimetype || 'application/octet-stream'};base64,${file.buffer.toString('base64')}`
       const folderForCloud = folderPath.join('/') || undefined
       const studentPhoto = isStudentPhotoPreset(req);
+      const manualStudentPhoto = isManualStudentPhotoPreset(req);
       const cloudResp = await cloudinary.uploader.upload(
         dataUri,
         buildCloudinaryUploadOptions({ folderForCloud, studentPhoto })
       )
       const transformedUrl = studentPhoto ? cloudResp.eager?.[0]?.secure_url : null;
+      const manualUrl = manualStudentPhoto
+        ? buildCloudinaryDeliveryUrl(cloudResp.secure_url, "f_auto,q_auto,c_fill,g_center,w_318,h_414")
+        : null;
 
       return res.status(201).json({
         success: true,
@@ -145,9 +160,9 @@ export async function uploadSingleImage(req, res) {
           name: cloudResp.original_filename || cloudResp.public_id,
           size: file.size,
           public_id: cloudResp.public_id,
-          url: transformedUrl || cloudResp.secure_url,
+          url: transformedUrl || manualUrl || cloudResp.secure_url,
           original_url: cloudResp.secure_url,
-          transformed: Boolean(transformedUrl),
+          transformed: Boolean(transformedUrl || manualUrl),
         },
       })
     }
