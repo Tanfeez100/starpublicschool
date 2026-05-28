@@ -373,11 +373,10 @@ const completeCapturedPublicPayment = async ({
     }
   }
 
-  let sms = createdPayment
-    ? { sent: false, skipped: true }
-    : { sent: false, skipped: true, reason: "Payment was already recorded" };
-  const registeredMobile = invoiceData.student?.mobile || mobile;
-  if (createdPayment && normalizeDigits(registeredMobile)) {
+  let sms = { sent: false, skipped: true };
+  const registeredMobile = invoiceData.student?.mobile;
+  const amountPaid = toAmount(cashfreePayment.payment_amount || order.order_amount);
+  if (normalizeDigits(registeredMobile)) {
     try {
       const refreshedInvoice = await buildInvoiceData(billId);
       const latestInvoiceData = refreshedInvoice.invoiceData || invoiceData;
@@ -386,14 +385,26 @@ const completeCapturedPublicPayment = async ({
         studentName: latestInvoiceData.student?.name,
         invoiceNumber: latestInvoiceData.invoice_number,
         month: latestInvoiceData.month,
-        amountPaid: toAmount(cashfreePayment.payment_amount || order.order_amount),
+        dueBeforePayment: invoiceData.remaining,
+        amountPaid,
         remaining: latestInvoiceData.remaining,
         receiptUrl,
       });
     } catch (smsError) {
       console.error("Twilio fee payment SMS failed:", smsError);
-      sms = { sent: false, error: smsError.message };
+      sms = {
+        sent: false,
+        error: smsError.message,
+        code: smsError.code,
+        more_info: smsError.moreInfo,
+      };
     }
+  } else {
+    sms = {
+      sent: false,
+      skipped: true,
+      reason: "Student registered mobile number is missing",
+    };
   }
 
   return {
@@ -485,8 +496,16 @@ export const createPublicFeeOrder = async (req, res) => {
     }
 
     const normalizedMobile = normalizeDigits(mobile);
+    const registeredMobile = normalizeDigits(invoiceData.student?.mobile);
     if (normalizedMobile && !mobileMatches(invoiceData.student?.mobile, mobile)) {
       return res.status(403).json({ message: "Mobile number does not match this bill" });
+    }
+
+    const paymentMobile = normalizedMobile || registeredMobile;
+    if (!paymentMobile || paymentMobile.length < 10) {
+      return res.status(400).json({
+        message: "Student registered mobile number is required to create payment order",
+      });
     }
 
     if (invoiceData.remaining <= 0) {
@@ -499,10 +518,8 @@ export const createPublicFeeOrder = async (req, res) => {
     const customerDetails = {
       customer_id: sanitizeCashfreeOrderId(invoiceData.student?.id || bill_id),
       customer_name: invoiceData.student?.name || "Student",
+      customer_phone: paymentMobile.slice(-10),
     };
-    if (normalizedMobile) {
-      customerDetails.customer_phone = normalizedMobile.slice(-10);
-    }
 
     const orderBody = {
       order_id: orderId,
@@ -522,9 +539,7 @@ export const createPublicFeeOrder = async (req, res) => {
       },
     };
 
-    if (normalizedMobile) {
-      orderBody.order_tags.mobile = normalizedMobile.slice(-10);
-    }
+    orderBody.order_tags.mobile = paymentMobile.slice(-10);
 
     const order = await cashfreeRequest("/orders", {
       method: "POST",

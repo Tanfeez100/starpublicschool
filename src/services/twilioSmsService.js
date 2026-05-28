@@ -3,6 +3,7 @@ const toSafeString = (value) => String(value ?? "").trim();
 const normalizePhoneForSms = (value) => {
   const digits = toSafeString(value).replace(/\D/g, "");
   if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("0")) return `+91${digits.slice(1)}`;
   if (digits.length === 10) return `+91${digits}`;
   if (digits.startsWith("91") && digits.length === 12) return `+${digits}`;
   return digits.startsWith("+") ? digits : `+${digits}`;
@@ -18,6 +19,7 @@ export const sendFeePaymentSms = async ({
   studentName,
   invoiceNumber,
   month,
+  dueBeforePayment,
   amountPaid,
   remaining,
   receiptUrl,
@@ -36,13 +38,20 @@ export const sendFeePaymentSms = async ({
     };
   }
 
+  const balance = Number.parseFloat(remaining || 0) || 0;
+  const statusLine =
+    balance > 0
+      ? `Abhi baaki dues: Rs. ${formatAmount(balance)}`
+      : "Aapka payment full and final ho gaya hai. Balance: Rs. 0.00";
+
   const body = [
-    "Gyanoday Public School fee payment received.",
+    "Gyanoday Public School: Fee payment received.",
     studentName ? `Student: ${studentName}` : "",
     invoiceNumber ? `Invoice: ${invoiceNumber}` : "",
     month ? `Month: ${month}` : "",
-    `Paid: Rs. ${formatAmount(amountPaid)}`,
-    Number.parseFloat(remaining || 0) > 0 ? `Balance: Rs. ${formatAmount(remaining)}` : "Balance: Rs. 0.00",
+    `Payment kiya: Rs. ${formatAmount(amountPaid)}`,
+    `Payment se pehle dues: Rs. ${formatAmount(dueBeforePayment)}`,
+    statusLine,
     receiptUrl ? `Receipt: ${receiptUrl}` : "",
   ]
     .filter(Boolean)
@@ -74,8 +83,18 @@ export const sendFeePaymentSms = async ({
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.message || "Failed to send Twilio SMS");
+    const error = new Error(data?.message || "Failed to send Twilio SMS");
+    error.status = response.status;
+    error.code = data?.code;
+    error.moreInfo = data?.more_info;
+    throw error;
   }
 
-  return { sent: true, sid: data?.sid, status: data?.status };
+  console.log("Twilio fee payment SMS sent:", {
+    sid: data?.sid,
+    status: data?.status,
+    to: to.replace(/\d(?=\d{4})/g, "*"),
+  });
+
+  return { sent: true, sid: data?.sid, status: data?.status, to };
 };
