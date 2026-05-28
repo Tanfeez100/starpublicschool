@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { supabase } from "../services/supabase.js";
 import { generateInvoicePDF } from "../services/pdfGenerator.js";
 import { sendReceiptOnWhatsApp } from "../services/whatsappService.js";
+import { sendFeePaymentSms } from "../services/twilioSmsService.js";
 
 const toSafeString = (value) => String(value ?? "").trim();
 const toAmount = (value) => Number.parseFloat(value || 0) || 0;
@@ -323,6 +324,7 @@ const completeCapturedPublicPayment = async ({
     .maybeSingle();
 
   let payment = existingPayment.data || null;
+  let createdPayment = false;
 
   if (existingPayment.error && existingPayment.error.code !== "PGRST116") {
     console.error("Existing public payment lookup failed:", existingPayment.error);
@@ -346,6 +348,7 @@ const completeCapturedPublicPayment = async ({
     }
 
     payment = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+    createdPayment = true;
   }
 
   const publicBaseUrl =
@@ -355,7 +358,7 @@ const completeCapturedPublicPayment = async ({
   }`;
 
   let whatsapp = { sent: false, skipped: true };
-  if (normalizeDigits(mobile)) {
+  if (createdPayment && normalizeDigits(mobile)) {
     try {
       whatsapp = await sendReceiptOnWhatsApp({
         mobile,
@@ -370,6 +373,29 @@ const completeCapturedPublicPayment = async ({
     }
   }
 
+  let sms = createdPayment
+    ? { sent: false, skipped: true }
+    : { sent: false, skipped: true, reason: "Payment was already recorded" };
+  const registeredMobile = invoiceData.student?.mobile || mobile;
+  if (createdPayment && normalizeDigits(registeredMobile)) {
+    try {
+      const refreshedInvoice = await buildInvoiceData(billId);
+      const latestInvoiceData = refreshedInvoice.invoiceData || invoiceData;
+      sms = await sendFeePaymentSms({
+        mobile: registeredMobile,
+        studentName: latestInvoiceData.student?.name,
+        invoiceNumber: latestInvoiceData.invoice_number,
+        month: latestInvoiceData.month,
+        amountPaid: toAmount(cashfreePayment.payment_amount || order.order_amount),
+        remaining: latestInvoiceData.remaining,
+        receiptUrl,
+      });
+    } catch (smsError) {
+      console.error("Twilio fee payment SMS failed:", smsError);
+      sms = { sent: false, error: smsError.message };
+    }
+  }
+
   return {
     status: "paid",
     message: "Payment verified and recorded successfully",
@@ -380,6 +406,7 @@ const completeCapturedPublicPayment = async ({
     bill_id: billId,
     receipt_url: receiptUrl,
     whatsapp,
+    sms,
   };
 };
 
