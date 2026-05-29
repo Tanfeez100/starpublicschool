@@ -636,6 +636,81 @@ export const getPublicFeePaymentStatus = async (req, res) => {
   }
 };
 
+export const lookupPublicReceipt = async (req, res) => {
+  try {
+    const { class: className, section, roll_number, month, mobile } = req.body;
+
+    if (!className || !section || !roll_number || !month) {
+      return res.status(400).json({
+        message: "class, section, roll_number and month are required",
+      });
+    }
+
+    if (!/^\d{4}-\d{2}$/.test(toSafeString(month))) {
+      return res.status(400).json({ message: "Invalid month format. Use YYYY-MM" });
+    }
+
+    const student = await resolvePublicStudent({
+      className,
+      section,
+      rollNumber: roll_number,
+      mobile,
+    });
+
+    if (!student) {
+      return res.status(404).json({
+        message: "Student not found. Please check class, roll, section and mobile number.",
+      });
+    }
+
+    const { data: bill, error: billError } = await supabase
+      .from("fee_bills")
+      .select("id, month, total_amount, bill_status, created_at")
+      .eq("student_id", student.id)
+      .eq("month", toSafeString(month))
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (billError) throw billError;
+
+    if (!bill) {
+      return res.status(404).json({ message: "No fee bill found for selected month" });
+    }
+
+    const enrichedBill = await enrichBill(bill);
+    if (toAmount(enrichedBill.total_paid) <= 0) {
+      return res.status(404).json({
+        message: "Receipt is available only after payment is recorded for this month",
+      });
+    }
+
+    const publicBaseUrl =
+      process.env.PUBLIC_BACKEND_URL || `${req.protocol}://${req.get("host")}`;
+    const receiptUrl = `${publicBaseUrl}/api/public-fees/receipt/${bill.id}${
+      mobile ? `?mobile=${encodeURIComponent(mobile)}` : ""
+    }`;
+
+    return res.json({
+      message: "Receipt found",
+      receipt_url: receiptUrl,
+      student: {
+        id: student.id,
+        name: student.name,
+        father_name: student.father_name,
+        roll_no: student.roll_no,
+        class: student.class,
+        section: student.section,
+        session: student.academic_year,
+      },
+      bill: enrichedBill,
+    });
+  } catch (error) {
+    console.error("Public receipt lookup error:", error);
+    return res.status(500).json({ message: "Failed to find receipt", error: error.message });
+  }
+};
+
 export const downloadPublicReceipt = async (req, res) => {
   try {
     const { bill_id } = req.params;

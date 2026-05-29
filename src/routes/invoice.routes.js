@@ -5,6 +5,13 @@ import { adminOrTeacher } from "../middleware/auth.middleware.js";
 const router = express.Router();
 
 /**
+ * GET /api/invoice/public/download/:bill_id
+ * Download invoice as professional PDF
+ * Public
+ */
+router.get("/public/download/:bill_id", downloadInvoice);
+
+/**
  * GET /api/invoice/download/:bill_id
  * Download invoice as professional PDF
  * Admin or Teacher

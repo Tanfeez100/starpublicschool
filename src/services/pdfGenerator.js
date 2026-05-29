@@ -434,40 +434,50 @@ export const generateInvoicePDF = async (invoiceData) => {
       const margin = 50;
       const contentWidth = pageWidth - 2 * margin;
 
+      const primary = "#1e293b";
+      const accent = "#4f46e5";
+      const mutedText = "#64748b";
+      const lineColor = "#dbe3ef";
+      const rowAlt = "#f8fafc";
+
       // Header Section
+      doc
+        .roundedRect(margin, 42, contentWidth, 108, 8)
+        .fill(primary);
+
       doc
         .fontSize(24)
         .font("Helvetica-Bold")
-        .fillColor("#1a1a1a")
-        .text("INVOICE", margin, 50, { align: "left" });
+        .fillColor("#ffffff")
+        .text("INVOICE", margin + 20, 62, { align: "left" });
 
       // School Details (customize these)
       doc
         .fontSize(12)
         .font("Helvetica")
-        .fillColor("#666666")
-        .text("Gyanoday Public School", margin, 80)
-        .text("Blaspur Dainmanwa Road, ", margin, 95)
-        .text("Harinagar (W. Champaran)- 845106", margin, 110)
-        .text("Phone: +91 9876543210, +91 9123456789", margin, 125)
-        .text("Email: gpschool2025@gmail.com", margin, 140);
+        .fillColor("#cbd5e1")
+        .text("Gyanoday Public School", margin + 20, 92)
+        .text("Blaspur Dainmanwa Road", margin + 20, 107)
+        .text("Harinagar (W. Champaran)- 845106", margin + 20, 122)
+        .text("Phone: +91 9876543210, +91 9123456789", margin + 20, 137);
 
       // Invoice Number and Date (Right aligned)
       doc
         .fontSize(10)
         .font("Helvetica")
-        .fillColor("#333333")
-        .text(`Invoice #: ${invoiceData.invoice_number}`, margin, 80, {
+        .fillColor("#ffffff")
+        .text(`Invoice #: ${invoiceData.invoice_number}`, margin + 20, 78, {
           align: "right",
-          width: contentWidth,
+          width: contentWidth - 40,
         })
-        .text(`Date: ${formatDate(invoiceData.date)}`, margin, 95, {
+        .fillColor("#cbd5e1")
+        .text(`Date: ${formatDate(invoiceData.date)}`, margin + 20, 96, {
           align: "right",
-          width: contentWidth,
+          width: contentWidth - 40,
         })
-        .text(`Month: ${formatMonthName(invoiceData.month)}`, margin, 110, {
+        .text(`Month: ${formatMonthName(invoiceData.month)}`, margin + 20, 114, {
           align: "right",
-          width: contentWidth,
+          width: contentWidth - 40,
         });
 
       let currentY = 180;
@@ -476,7 +486,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .moveTo(margin, currentY)
         .lineTo(pageWidth - margin, currentY)
-        .strokeColor("#cccccc")
+        .strokeColor(lineColor)
         .lineWidth(1)
         .stroke();
       currentY += 20;
@@ -485,7 +495,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .fontSize(12)
         .font("Helvetica-Bold")
-        .fillColor("#1a1a1a")
+        .fillColor(primary)
         .text("Bill To:", margin, currentY);
       currentY += 20;
 
@@ -493,7 +503,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .fontSize(10)
         .font("Helvetica")
-        .fillColor("#333333")
+        .fillColor(primary)
         .text(`Student: ${student?.name || "N/A"}`, margin, currentY)
         .text(`Roll No: ${student?.roll_no || "N/A"}`, margin, currentY + 15)
         .text(`Class: ${student?.class || "N/A"} - ${student?.section || "N/A"}`, margin, currentY + 30)
@@ -505,7 +515,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .moveTo(margin, currentY)
         .lineTo(pageWidth - margin, currentY)
-        .strokeColor("#cccccc")
+        .strokeColor(lineColor)
         .lineWidth(1)
         .stroke();
       currentY += 20;
@@ -516,7 +526,7 @@ export const generateInvoicePDF = async (invoiceData) => {
         .font("Helvetica-Bold")
         .fillColor("#ffffff")
         .rect(margin, currentY, contentWidth, 25)
-        .fill("#2c3e50")
+        .fill(accent)
         .fillColor("#ffffff")
         .text("Fee Description", margin + 10, currentY + 8)
         .text("Amount", pageWidth - margin - 100, currentY + 8, { align: "right", width: 90 });
@@ -526,11 +536,11 @@ export const generateInvoicePDF = async (invoiceData) => {
       // Fee Items
       doc.fontSize(9).font("Helvetica").fillColor("#333333");
       invoiceData.items.forEach((item, index) => {
-        const bgColor = index % 2 === 0 ? "#f8f9fa" : "#ffffff";
+        const bgColor = index % 2 === 0 ? rowAlt : "#ffffff";
         doc
           .rect(margin, currentY, contentWidth, 20)
           .fill(bgColor)
-          .fillColor("#333333")
+          .fillColor(primary)
           .text(item.fee_name, margin + 10, currentY + 6)
           .text(`Rs. ${parseFloat(item.amount).toFixed(2)}`, pageWidth - margin - 100, currentY + 6, {
             align: "right",
@@ -544,7 +554,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .moveTo(margin, currentY)
         .lineTo(pageWidth - margin, currentY)
-        .strokeColor("#cccccc")
+        .strokeColor(lineColor)
         .lineWidth(1)
         .stroke();
       currentY += 15;
@@ -552,7 +562,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .fontSize(11)
         .font("Helvetica-Bold")
-        .fillColor("#1a1a1a")
+        .fillColor(primary)
         .text("Total Amount:", margin, currentY)
         .text(`Rs. ${parseFloat(invoiceData.total_amount).toFixed(2)}`, pageWidth - margin - 100, currentY, {
           align: "right",
@@ -565,11 +575,11 @@ export const generateInvoicePDF = async (invoiceData) => {
         doc
           .fontSize(10)
           .font("Helvetica-Bold")
-          .fillColor("#1a1a1a")
+          .fillColor(primary)
           .text("Payments:", margin, currentY);
         currentY += 20;
 
-        doc.fontSize(9).font("Helvetica").fillColor("#333333");
+        doc.fontSize(9).font("Helvetica").fillColor(primary);
         invoiceData.payments.forEach((payment) => {
           doc
             .text(
@@ -587,7 +597,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .moveTo(margin, currentY)
         .lineTo(pageWidth - margin, currentY)
-        .strokeColor("#cccccc")
+        .strokeColor(lineColor)
         .lineWidth(1)
         .stroke();
       currentY += 20;
@@ -595,7 +605,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .fontSize(10)
         .font("Helvetica")
-        .fillColor("#333333")
+        .fillColor(primary)
         .text(`Total Paid: Rs. ${parseFloat(invoiceData.total_paid || 0).toFixed(2)}`, margin, currentY)
         .text(`Remaining: Rs. ${parseFloat(invoiceData.remaining || 0).toFixed(2)}`, margin, currentY + 20);
 
@@ -605,7 +615,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       // Normalize status to lowercase so checks are case-insensitive
       const status = (invoiceData.status || "unpaid").toString().toLowerCase();
       const statusColor =
-        status === "paid" ? "#27ae60" : status === "partial" ? "#f39c12" : "#e74c3c";
+        status === "paid" ? "#059669" : status === "partial" ? "#d97706" : "#dc2626";
       doc
         .fontSize(10)
         .font("Helvetica-Bold")
@@ -621,7 +631,7 @@ export const generateInvoicePDF = async (invoiceData) => {
       doc
         .fontSize(8)
         .font("Helvetica")
-        .fillColor("#999999")
+        .fillColor(mutedText)
         .text("Thank you for your payment!", margin, currentY, { align: "center", width: contentWidth })
         .text("This is a computer-generated invoice.", margin, currentY + 15, {
           align: "center",
