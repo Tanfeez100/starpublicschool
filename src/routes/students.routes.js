@@ -112,6 +112,18 @@ const normalizeAadhaarCard = (value, { required = false } = {}) => {
   return digits;
 };
 
+const normalizePenNumber = (value) => {
+  const normalized = sanitizeString(value);
+  if (!normalized) return null;
+
+  const pen = String(normalized).toUpperCase();
+  if (!/^[A-Z0-9]+$/.test(pen)) {
+    throw new Error("pen_number must contain only letters and numbers");
+  }
+
+  return pen;
+};
+
 const buildRollConflictMessage = (className, section, academicYear, rollNo) =>
   `Roll ${rollNo} is already assigned to an active student in class "${className}", section "${section}", academic year "${academicYear}"`;
 
@@ -177,7 +189,7 @@ router.get("/all", adminOrTeacher, async (req, res) => {
     let query = supabase
       .from("students")
       .select(
-        "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge, aadhaar_card, photo_url"
+        "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge, aadhaar_card, pen_number, photo_url"
       )
       .order("class", { ascending: true })
       .order("section", { ascending: true })
@@ -216,6 +228,7 @@ router.get("/all", adminOrTeacher, async (req, res) => {
       LeftDate: student.left_date || "",
       Mobile: student.mobile || "",
       Aadhaar: student.aadhaar_card || "",
+      PenNumber: student.pen_number || "",
       PhotoUrl: student.photo_url || "",
       Address: student.address || "",
       Transport: student.uses_transport
@@ -312,7 +325,7 @@ router.get("/", adminOrTeacher, async (req, res) => {
     let query = supabase
       .from("students")
       .select(
-        "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport, aadhaar_card, photo_url"
+        "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport, aadhaar_card, pen_number, photo_url"
       )
       .eq("class", String(cls).trim())
       .order("roll_no");
@@ -405,6 +418,7 @@ router.post("/add", adminOnly, async (req, res) => {
       uses_transport,
       transport_charge,
       aadhaar_card,
+      pen_number,
       photo_url,
     } = req.body;
 
@@ -435,6 +449,7 @@ router.post("/add", adminOnly, async (req, res) => {
 
     const normalizedUsesTransport = normalizeOptionalTransport(uses_transport);
     const normalizedAadhaar = normalizeAadhaarCard(aadhaar_card, { required: true });
+    const normalizedPenNumber = normalizePenNumber(pen_number);
 
     const { data, error } = await supabase
       .from("students")
@@ -452,6 +467,7 @@ router.post("/add", adminOnly, async (req, res) => {
           left_date: null,
           mobile: sanitizeString(mobile),
           aadhaar_card: normalizedAadhaar,
+          pen_number: normalizedPenNumber,
           photo_url: sanitizeString(photo_url) || null,
           address: sanitizeString(address),
           uses_transport: normalizedUsesTransport ?? false,
@@ -482,7 +498,11 @@ router.post("/add", adminOnly, async (req, res) => {
       status: data.status,
     });
   } catch (err) {
-    if (err.message.includes("roll_no") || err.message.includes("academic_year")) {
+    if (
+      err.message.includes("roll_no") ||
+      err.message.includes("academic_year") ||
+      err.message.includes("pen_number")
+    ) {
       return res.status(400).json({ message: err.message });
     }
     res.status(500).json({ message: err.message });
@@ -509,6 +529,7 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
       mobile,
       address,
       aadhaar_card,
+      pen_number,
       photo_url,
       class: clsRaw,
       roll_no: rollNoRaw,
@@ -613,6 +634,7 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
     if (mobile !== undefined) updateData.mobile = sanitizeString(mobile);
     if (address !== undefined) updateData.address = sanitizeString(address);
     if (aadhaar_card !== undefined) updateData.aadhaar_card = normalizeAadhaarCard(aadhaar_card);
+    if (pen_number !== undefined) updateData.pen_number = normalizePenNumber(pen_number);
     if (photo_url !== undefined) updateData.photo_url = sanitizeString(photo_url) || null;
 
     const normalizedUsesTransport = normalizeOptionalTransport(uses_transport);
@@ -662,6 +684,7 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
     if (
       err.message.includes("roll_no") ||
       err.message.includes("academic_year") ||
+      err.message.includes("pen_number") ||
       err.message.includes("status") ||
       err.message.includes("left_date")
     ) {

@@ -26,12 +26,20 @@ const sanitizeCashfreeOrderId = (value) =>
   toSafeString(value).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 45);
 
 const getCashfreeMode = () => {
+  const secretKey = toSafeString(process.env.CASHFREE_SECRET_KEY);
+  if (secretKey.includes("_test_")) {
+    return "sandbox";
+  }
+  if (secretKey.includes("_prod_")) {
+    return "production";
+  }
+
   const configuredMode = normalizeLoose(process.env.CASHFREE_ENV || process.env.CASHFREE_MODE);
   if (configuredMode) {
     return configuredMode === "production" || configuredMode === "prod" ? "production" : "sandbox";
   }
 
-  return toSafeString(process.env.CASHFREE_SECRET_KEY).includes("_prod_") ? "production" : "sandbox";
+  return "sandbox";
 };
 
 const getCashfreeBaseUrl = () =>
@@ -41,8 +49,8 @@ const getCashfreeBaseUrl = () =>
     : "https://sandbox.cashfree.com/pg");
 
 const getCashfreeCredentials = () => {
-  const clientId = process.env.CASHFREE_CLIENT_ID || process.env.CASHFREE_APP_ID;
-  const clientSecret = process.env.CASHFREE_CLIENT_SECRET || process.env.CASHFREE_SECRET_KEY;
+  const clientId = toSafeString(process.env.CASHFREE_APP_ID || process.env.CASHFREE_CLIENT_ID);
+  const clientSecret = toSafeString(process.env.CASHFREE_SECRET_KEY || process.env.CASHFREE_CLIENT_SECRET);
 
   if (!clientId || !clientSecret) {
     throw new Error("Cashfree credentials are not configured");
@@ -83,6 +91,8 @@ const cashfreeRequest = async (path, { method = "GET", body, idempotencyKey } = 
     const error = new Error(message);
     error.status = response.status;
     error.data = data;
+    error.cashfreeMode = getCashfreeMode();
+    error.cashfreeBaseUrl = getCashfreeBaseUrl();
     throw error;
   }
 
@@ -568,7 +578,15 @@ export const createPublicFeeOrder = async (req, res) => {
     });
   } catch (error) {
     console.error("Create public fee order error:", error);
-    return res.status(500).json({ message: "Failed to create payment order", error: error.message });
+    const isCashfreeAuthError = /auth/i.test(error.message || "");
+    return res.status(isCashfreeAuthError ? 401 : 500).json({
+      message: "Failed to create payment order",
+      error: error.message,
+      cashfree_mode: error.cashfreeMode || getCashfreeMode(),
+      hint: isCashfreeAuthError
+        ? "Cashfree App ID and Secret Key must belong to the same Cashfree PG environment."
+        : undefined,
+    });
   }
 };
 

@@ -4,6 +4,7 @@ import { adminOrTeacher } from "../middleware/auth.middleware.js";
 import {
   deleteImage,
   listImages,
+  listPublicImages,
   uploadBulkImages,
   uploadSingleImage,
 } from "../controllers/mega.controller.js";
@@ -30,6 +31,7 @@ const uploadAnyBulk = upload.fields([
 
 router.post("/images", adminOrTeacher, uploadAnySingle, uploadSingleImage);
 router.post("/images/bulk", adminOrTeacher, uploadAnyBulk, uploadBulkImages);
+router.get("/images/public", listPublicImages);
 router.get("/images", adminOrTeacher, listImages);
 router.delete("/images/:nodeId", adminOrTeacher, deleteImage);
 

@@ -25,7 +25,7 @@ export const sendReceiptOnWhatsApp = async ({
   }
 
   const caption = [
-    `Gyanoday Public School fee receipt${invoiceNumber ? ` (${invoiceNumber})` : ""}.`,
+    `Star Public School fee receipt${invoiceNumber ? ` (${invoiceNumber})` : ""}.`,
     studentName ? `Student: ${studentName}` : "",
     amount ? `Amount: Rs. ${Number(amount).toFixed(2)}` : "",
   ]

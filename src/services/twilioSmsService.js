@@ -45,7 +45,7 @@ export const sendFeePaymentSms = async ({
       : "Aapka payment full and final ho gaya hai. Balance: Rs. 0.00";
 
   const body = [
-    "Gyanoday Public School: Fee payment received.",
+    "Star Public School: Fee payment received.",
     studentName ? `Student: ${studentName}` : "",
     invoiceNumber ? `Invoice: ${invoiceNumber}` : "",
     month ? `Month: ${month}` : "",

@@ -54,17 +54,17 @@ async function findMegaFileByNodeId(storage, nodeId) {
 
 function getMissingCloudinaryConfig() {
   const missing = [];
-  if (!process.env.CLOUDINARY_CLOUD_NAME) missing.push("CLOUDINARY_CLOUD_NAME");
-  if (!process.env.CLOUDINARY_API_KEY) missing.push("CLOUDINARY_API_KEY");
-  if (!process.env.CLOUDINARY_API_SECRET) missing.push("CLOUDINARY_API_SECRET");
+  if (!String(process.env.CLOUDINARY_CLOUD_NAME || "").trim()) missing.push("CLOUDINARY_CLOUD_NAME");
+  if (!String(process.env.CLOUDINARY_API_KEY || "").trim()) missing.push("CLOUDINARY_API_KEY");
+  if (!String(process.env.CLOUDINARY_API_SECRET || "").trim()) missing.push("CLOUDINARY_API_SECRET");
   return missing;
 }
 
 function configureCloudinary() {
   cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
+    cloud_name: String(process.env.CLOUDINARY_CLOUD_NAME || "").trim(),
+    api_key: String(process.env.CLOUDINARY_API_KEY || "").trim(),
+    api_secret: String(process.env.CLOUDINARY_API_SECRET || "").trim(),
   });
 }
 
@@ -106,6 +106,37 @@ function buildCloudinaryUploadOptions({ folderForCloud, studentPhoto = false }) 
   return options;
 }
 
+function getImageFolderPath(req, isPublic, fallbackChild = "") {
+  const basePath = getMegaFolderPath({ isPublic });
+  const rawFolder = String(req.query.folder || fallbackChild || "").trim();
+  const extraPath = rawFolder
+    .split("/")
+    .map((part) => part.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-"))
+    .filter(Boolean);
+
+  return [...basePath, ...extraPath];
+}
+
+async function listCloudinaryImages({ folderPath }) {
+  const folderPrefix = folderPath.join("/");
+  const response = await cloudinary.api.resources({
+    type: "upload",
+    resource_type: "image",
+    prefix: folderPrefix || undefined,
+    max_results: 100,
+  });
+
+  return (response.resources || []).map((item) => ({
+    name: item.filename || item.public_id,
+    size: item.bytes || 0,
+    nodeId: item.public_id,
+    public_id: item.public_id,
+    url: item.secure_url,
+    created_at: item.created_at,
+    provider: "cloudinary",
+  }));
+}
+
 export async function uploadSingleImage(req, res) {
   try {
     const isPublic = parseBoolean(req.query.public, false);
@@ -120,7 +151,7 @@ export async function uploadSingleImage(req, res) {
       });
     }
 
-    const folderPath = getMegaFolderPath({ isPublic });
+    const folderPath = getImageFolderPath(req, isPublic);
 
     // If Cloudinary requested, upload to Cloudinary instead
     if (provider === 'cloudinary') {
@@ -220,7 +251,7 @@ export async function uploadBulkImages(req, res) {
       });
     }
 
-    const folderPath = getMegaFolderPath({ isPublic });
+    const folderPath = getImageFolderPath(req, isPublic);
 
     // Cloudinary bulk upload path
     if (provider === 'cloudinary') {
@@ -301,17 +332,42 @@ export async function uploadBulkImages(req, res) {
   }
 }
 
-export async function listImages(req, res) {
+async function listImagesInternal(req, res, { forcePublic, forceProvider, folderName = "" } = {}) {
   try {
-    const isPublic = parseBoolean(req.query.public, false);
+    const isPublic = typeof forcePublic === "boolean" ? forcePublic : parseBoolean(req.query.public, false);
     const includeLinks = parseBoolean(req.query.includeLinks, true);
+    const provider = String(forceProvider || req.query.provider || "").toLowerCase();
+    const folderPath = getImageFolderPath(req, isPublic, folderName);
+
+    if (provider === "cloudinary") {
+      const missing = getMissingCloudinaryConfig();
+      if (missing.length) {
+        return res.status(500).json({
+          success: false,
+          message: "Cloudinary list requested but Cloudinary credentials are not configured in .env",
+          missing,
+          hint: "Set CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET in .env.",
+        });
+      }
+
+      configureCloudinary();
+      const files = await listCloudinaryImages({ folderPath });
+
+      return res.status(200).json({
+        success: true,
+        public: isPublic,
+        provider: "cloudinary",
+        folderPathUsed: folderPath.join("/"),
+        count: files.length,
+        files,
+      });
+    }
 
     const storage = await getMegaStorage();
-    const folderPath = getMegaFolderPath({ isPublic });
-    const folder = await ensureMegaFolder(storage, folderPath);
+    const megaFolder = await ensureMegaFolder(storage, folderPath);
     await storage.reload(false);
 
-    const children = Array.isArray(folder.children) ? folder.children : [];
+    const children = Array.isArray(megaFolder.children) ? megaFolder.children : [];
     const files = children.filter((c) => c && !c.directory);
 
     const out = [];
@@ -334,22 +390,63 @@ export async function listImages(req, res) {
     });
   } catch (err) {
     const e = normalizeMegaError(err);
+    const provider = String(forceProvider || req.query.provider || "").toLowerCase();
+    const isCloudinary = provider === "cloudinary";
     return res.status(e.status).json({
       success: false,
-      message: "Failed to list MEGA images",
+      message: isCloudinary ? "Failed to list Cloudinary images" : "Failed to list MEGA images",
       error: e.message,
-      hint: "Check MEGA_EMAIL / MEGA_PASSWORD in .env",
+      hint: isCloudinary
+        ? "Check CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET in .env."
+        : "Check MEGA_EMAIL / MEGA_PASSWORD in .env",
     });
   }
+}
+
+export async function listImages(req, res) {
+  return listImagesInternal(req, res);
+}
+
+export async function listPublicImages(req, res) {
+  return listImagesInternal(req, res, { forcePublic: true, forceProvider: "cloudinary", folderName: "best-moments" });
 }
 
 export async function deleteImage(req, res) {
   try {
     const nodeId = String(req.params.nodeId || "").trim();
+    const provider = String(req.query.provider || "").toLowerCase();
     if (!nodeId) {
       return res.status(400).json({
         success: false,
         message: "Missing nodeId",
+      });
+    }
+
+    if (provider === "cloudinary") {
+      const missing = getMissingCloudinaryConfig();
+      if (missing.length) {
+        return res.status(500).json({
+          success: false,
+          message: "Cloudinary delete requested but Cloudinary credentials are not configured in .env",
+          missing,
+        });
+      }
+
+      configureCloudinary();
+      const result = await cloudinary.uploader.destroy(nodeId, { resource_type: "image" });
+      if (result?.result === "not found") {
+        return res.status(404).json({
+          success: false,
+          message: "File not found",
+          nodeId,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Deleted",
+        nodeId,
+        provider: "cloudinary",
       });
     }
 

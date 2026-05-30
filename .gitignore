@@ -41,3 +41,5 @@ postman_*.json
 *_collection.json
 postman_collections/
 postman_collections/*.json
+
+migrations/*.sql
