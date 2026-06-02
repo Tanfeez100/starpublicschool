@@ -17,7 +17,7 @@ const normalizeClassForPromotion = (className) => {
   const value = String(className || "").trim().toUpperCase();
   const compact = value.replace(/[\s.]/g, "");
 
-  if (compact === "MOTHERCARE") return "MOTHER CARE";
+  if (compact === "MOTHERCARE" || compact === "NURSERY") return "NURSERY";
   if (compact === "LKG") return "LKG";
   if (compact === "UKG") return "UKG";
   if (/^[1-8]$/.test(compact)) return compact;
@@ -28,7 +28,7 @@ const normalizeClassForPromotion = (className) => {
 const getPromotionTarget = (className) => {
   const normalizedClass = normalizeClassForPromotion(className);
 
-  if (normalizedClass === "MOTHER CARE") return { nextClass: "LKG", passedOut: false };
+  if (normalizedClass === "NURSERY") return { nextClass: "LKG", passedOut: false };
   if (normalizedClass === "LKG") return { nextClass: "UKG", passedOut: false };
   if (normalizedClass === "UKG") return { nextClass: "1", passedOut: false };
   if (normalizedClass === "1") return { nextClass: "2", passedOut: false };
@@ -277,6 +277,52 @@ const fetchClassSubjectsWithFallback = async (className, section) => {
   }
 
   return { classSubjects, csError };
+};
+
+const getTeacherAssignment = async (teacherId) => {
+  const { data, error } = await supabase
+    .from("teacher_assignments")
+    .select("teacher_id, class, section, academic_year")
+    .eq("teacher_id", teacherId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to fetch teacher assignment: ${error.message}`);
+  }
+
+  return data || null;
+};
+
+const ensureTeacherCanAccessClassSection = async ({
+  user,
+  className,
+  section,
+  academicYear = null,
+}) => {
+  if (user?.role !== "teacher") return null;
+
+  const assignment = await getTeacherAssignment(user.id);
+  if (!assignment) {
+    const error = new Error("Teacher is not assigned to any class/section.");
+    error.status = 403;
+    throw error;
+  }
+
+  const requestedYear = academicYear ? String(academicYear).trim() : assignment.academic_year;
+  const mismatch =
+    String(className || "").trim() !== assignment.class ||
+    String(section || "").trim() !== assignment.section ||
+    requestedYear !== assignment.academic_year;
+
+  if (mismatch) {
+    const error = new Error(
+      `Teacher can submit/view marks only for assigned class ${assignment.class}, section ${assignment.section}, ${assignment.academic_year}.`
+    );
+    error.status = 403;
+    throw error;
+  }
+
+  return assignment;
 };
 
 const isProvided = (value) =>
@@ -1426,6 +1472,13 @@ export const submitMarks = async (req, res) => {
       });
     }
 
+    await ensureTeacherCanAccessClassSection({
+      user: req.user,
+      className,
+      section,
+      academicYear,
+    });
+
     const studentResult = await resolveStudentForSubmission({
       className,
       section,
@@ -1643,9 +1696,9 @@ export const submitMarks = async (req, res) => {
     });
   } catch (err) {
     console.error("Submit marks error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
+    res.status(err.status || 500).json({ 
+      message: err.status ? err.message : "Server error",
+      error: err.status ? undefined : err.message 
     });
   }
 };
@@ -2068,6 +2121,12 @@ export const getMarks = async (req, res) => {
       });
     }
 
+    await ensureTeacherCanAccessClassSection({
+      user: req.user,
+      className,
+      section,
+    });
+
     const requestedTerminal =
       normalizeResultTerminalLabel(requestedTerminalRaw) || requestedTerminalRaw;
     const marksCacheBaseKey = buildReadCacheKey("marksByClass", {
@@ -2275,9 +2334,9 @@ export const getMarks = async (req, res) => {
     return res.json(responsePayload);
   } catch (err) {
     console.error("Get marks error:", err);
-    res.status(500).json({ 
-      message: "Server error",
-      error: err.message 
+    res.status(err.status || 500).json({ 
+      message: err.status ? err.message : "Server error",
+      error: err.status ? undefined : err.message 
     });
   }
 };

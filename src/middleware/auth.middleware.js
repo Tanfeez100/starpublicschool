@@ -1,4 +1,5 @@
 import { supabase, verifyToken, getRoleCached } from "../services/supabase.js";
+import jwt from "jsonwebtoken";
 
 /**
  * Retry wrapper for auth operations
@@ -35,6 +36,27 @@ export const authenticate = async (req, res, next) => {
     }
 
     const token = authHeader.split(" ")[1];
+    const jwtSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
+
+    if (jwtSecret) {
+      try {
+        const decoded = jwt.verify(token, jwtSecret);
+        if (decoded?.role === "student") {
+          req.user = {
+            id: decoded.id || decoded.sub,
+            email: decoded.email || null,
+            role: "student",
+            class: decoded.class || null,
+            section: decoded.section || null,
+            name: decoded.name || null,
+            rollNo: decoded.rollNo || decoded.roll_no || null,
+          };
+          return next();
+        }
+      } catch {
+        // Fall through to Supabase token verification for staff accounts.
+      }
+    }
 
     // ⚡ OPTIMIZATION: Verify token with retry logic
     const tokenVerification = await retryAuth(() => verifyToken(token));
@@ -116,3 +138,4 @@ export const teacherOnly = [authenticate, authorize("teacher")];
  */
 export const adminOrTeacher = [authenticate, authorize("admin", "teacher")];
 
+export const adminTeacherOrStudent = [authenticate, authorize("admin", "teacher", "student")];
