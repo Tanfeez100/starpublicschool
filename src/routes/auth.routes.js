@@ -422,7 +422,7 @@ router.get("/teachers", adminOnly, async (req, res) => {
   }
 });
 
-router.patch("/teachers/:id/assignment", adminOnly, async (req, res) => {
+const saveTeacherAssignment = async (req, res) => {
   try {
     const teacherId = req.params.id;
     const assignedClass = sanitizeString(req.body?.class || req.body?.assignedClass);
@@ -459,34 +459,49 @@ router.patch("/teachers/:id/assignment", adminOnly, async (req, res) => {
       });
     }
 
-    const { error: deleteExistingError } = await supabase
-      .from("teacher_assignments")
-      .delete()
-      .eq("teacher_id", teacherId);
+    const assignmentPayload = {
+      class: assignedClass,
+      section: assignedSection,
+      academic_year: academicYear,
+      updated_at: new Date().toISOString(),
+    };
 
-    if (deleteExistingError) {
+    const { data: existingAssignment, error: existingError } = await supabase
+      .from("teacher_assignments")
+      .select("teacher_id")
+      .eq("teacher_id", teacherId)
+      .maybeSingle();
+
+    if (existingError) {
       return res.status(500).json({
-        message: "Failed to replace previous teacher assignment",
-        error: deleteExistingError.message,
+        message: "Failed to check previous teacher assignment",
+        error: existingError.message,
       });
     }
 
-    const { data: assignment, error } = await supabase
-      .from("teacher_assignments")
-      .insert([
-        {
-          teacher_id: teacherId,
-          class: assignedClass,
-          section: assignedSection,
-          academic_year: academicYear,
-          updated_at: new Date().toISOString(),
-        },
-      ])
-      .select("teacher_id, class, section, academic_year, created_at, updated_at")
-      .single();
+    const assignmentQuery = existingAssignment
+      ? supabase
+          .from("teacher_assignments")
+          .update(assignmentPayload)
+          .eq("teacher_id", teacherId)
+          .select("teacher_id, class, section, academic_year, created_at, updated_at")
+          .single()
+      : supabase
+          .from("teacher_assignments")
+          .insert([
+            {
+              teacher_id: teacherId,
+              ...assignmentPayload,
+            },
+          ])
+          .select("teacher_id, class, section, academic_year, created_at, updated_at")
+          .single();
+
+    const { data: assignment, error } = await assignmentQuery;
 
     if (error) {
-      if (error.code === "23505") {
+      const isDuplicate = error.code === "23505" || /duplicate key/i.test(error.message || "");
+      if (isDuplicate) {
         return res.status(409).json({
           message: `Class ${assignedClass} section ${assignedSection} is already assigned for ${academicYear}`,
         });
@@ -500,7 +515,9 @@ router.patch("/teachers/:id/assignment", adminOnly, async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Teacher assigned successfully",
+      message: existingAssignment
+        ? "Teacher assignment updated successfully"
+        : "Teacher assigned successfully",
       assignment,
     });
   } catch (err) {
@@ -510,7 +527,10 @@ router.patch("/teachers/:id/assignment", adminOnly, async (req, res) => {
       ...(err.detail ? { error: err.detail } : {}),
     });
   }
-});
+};
+
+router.post("/teachers/:id/assignment", adminOnly, saveTeacherAssignment);
+router.patch("/teachers/:id/assignment", adminOnly, saveTeacherAssignment);
 
 router.delete("/teachers/:id/assignment", adminOnly, async (req, res) => {
   try {

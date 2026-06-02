@@ -109,12 +109,15 @@ create table if not exists public.attendance_records (
 
 create table if not exists public.holiday_calendar (
   id uuid primary key default gen_random_uuid(),
-  holiday_date date not null unique,
+  holiday_date date,
+  start_date date not null default current_date,
+  end_date date not null default current_date,
   title text not null,
   description text,
   created_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint holiday_calendar_date_range_check check (end_date >= start_date)
 );
 
 create index if not exists idx_teacher_assignments_class_section_year
@@ -137,6 +140,12 @@ create index if not exists idx_attendance_academic_year
 
 create index if not exists idx_holiday_calendar_date
   on public.holiday_calendar (holiday_date);
+
+create index if not exists idx_holiday_calendar_range
+  on public.holiday_calendar (start_date, end_date);
+
+create unique index if not exists idx_holiday_calendar_unique_range_title
+  on public.holiday_calendar (start_date, end_date, title);
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -363,7 +372,8 @@ Auth:
 Body:
 ```json
 {
-  "date": "2026-06-10",
+  "start_date": "2026-06-20",
+  "end_date": "2026-07-05",
   "title": "Summer Break",
   "description": "School closed",
   "apply_to_attendance": true
@@ -371,8 +381,8 @@ Body:
 ```
 
 Behavior:
-- Saves/updates holiday in `holiday_calendar`.
-- Marks active students as `holiday` in `attendance_records` for that date.
+- Saves/updates one holiday range row in `holiday_calendar`.
+- Marks active students as `holiday` in `attendance_records` for every date in that range.
 
 `DELETE /api/attendance/holidays/:id`
 

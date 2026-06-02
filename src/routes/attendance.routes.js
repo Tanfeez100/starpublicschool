@@ -285,8 +285,9 @@ const isCalendarHoliday = async (attendanceDate) => {
   const { data, error } = await supabase
     .from("holiday_calendar")
     .select("id")
-    .eq("holiday_date", attendanceDate)
-    .maybeSingle();
+    .lte("start_date", attendanceDate)
+    .gte("end_date", attendanceDate)
+    .limit(1);
 
   if (error) {
     if (isHolidayCalendarSchemaError(error)) {
@@ -296,18 +297,16 @@ const isCalendarHoliday = async (attendanceDate) => {
     throw new Error(getHolidayTableErrorMessage(error));
   }
 
-  return Boolean(data);
+  return Array.isArray(data) && data.length > 0;
 };
 
-const ensureFridayHolidayForScope = async ({
+const ensureHolidayForScope = async ({
   attendanceDate,
   className = null,
   section = null,
   academicYear = null,
   studentId = null,
 } = {}) => {
-  if (!isFriday(attendanceDate)) return [];
-
   const students = await fetchActiveStudentsForAttendance({
     className,
     section,
@@ -316,6 +315,11 @@ const ensureFridayHolidayForScope = async ({
   });
 
   return upsertHolidayRows(attendanceDate, students);
+};
+
+const ensureFridayHolidayForScope = async (options = {}) => {
+  if (!isFriday(options.attendanceDate)) return [];
+  return ensureHolidayForScope(options);
 };
 
 const applyRoleRestrictions = async (query, user) => {
@@ -447,10 +451,10 @@ router.get("/holidays", async (req, res) => {
     const range = normalizeDateRange(req.query);
     const { data, error } = await supabase
       .from("holiday_calendar")
-      .select("id, holiday_date, title, description, created_by, created_at, updated_at")
-      .gte("holiday_date", range.start)
-      .lte("holiday_date", range.end)
-      .order("holiday_date", { ascending: true });
+      .select("id, holiday_date, start_date, end_date, title, description, created_by, created_at, updated_at")
+      .lte("start_date", range.end)
+      .gte("end_date", range.start)
+      .order("start_date", { ascending: true });
 
     if (error) {
       if (!isHolidayCalendarSchemaError(error)) {
@@ -461,6 +465,8 @@ router.get("/holidays", async (req, res) => {
       const weeklyOnly = getFridaysInRange(range.start, range.end).map((date) => ({
         id: `friday-${date}`,
         holiday_date: date,
+        start_date: date,
+        end_date: date,
         title: "Friday Holiday",
         description: "Weekly Friday holiday",
         type: "weekly",
@@ -477,21 +483,26 @@ router.get("/holidays", async (req, res) => {
 
     const manual = (data || []).map((holiday) => ({
       ...holiday,
+      holiday_date: holiday.holiday_date || holiday.start_date,
       type: "manual",
     }));
-    const manualDateSet = new Set(manual.map((holiday) => holiday.holiday_date));
+    const manualDateSet = new Set(
+      manual.flatMap((holiday) => getDatesInRange(holiday.start_date, holiday.end_date))
+    );
     const weekly = getFridaysInRange(range.start, range.end)
       .filter((date) => !manualDateSet.has(date))
       .map((date) => ({
         id: `friday-${date}`,
         holiday_date: date,
+        start_date: date,
+        end_date: date,
         title: "Friday Holiday",
         description: "Weekly Friday holiday",
         type: "weekly",
       }));
 
     const holidays = [...manual, ...weekly].sort((a, b) =>
-      String(a.holiday_date).localeCompare(String(b.holiday_date))
+      String(a.start_date || a.holiday_date).localeCompare(String(b.start_date || b.holiday_date))
     );
 
     res.json({
@@ -525,19 +536,21 @@ router.post("/holidays", async (req, res) => {
     const description = sanitizeString(req.body?.description) || null;
     const applyToAttendance = req.body?.apply_to_attendance !== false;
 
-    const holidayRows = holidayDates.map((holidayDate) => ({
-      holiday_date: holidayDate,
+    const holidayRow = {
+      holiday_date: startDate,
+      start_date: startDate,
+      end_date: endDate,
       title,
       description,
       created_by: req.user.id,
       updated_at: new Date().toISOString(),
-    }));
+    };
 
     const { data: holidays, error } = await supabase
       .from("holiday_calendar")
-      .upsert(holidayRows, { onConflict: "holiday_date" })
-      .select("id, holiday_date, title, description, created_by, created_at, updated_at")
-      .order("holiday_date", { ascending: true });
+      .upsert([holidayRow], { onConflict: "start_date,end_date,title" })
+      .select("id, holiday_date, start_date, end_date, title, description, created_by, created_at, updated_at")
+      .order("start_date", { ascending: true });
 
     if (error) return sendError(res, 500, getHolidayTableErrorMessage(error));
 
@@ -576,7 +589,7 @@ router.delete("/holidays/:id", async (req, res) => {
     const holidayId = sanitizeString(req.params.id);
     const { data: holiday, error: fetchError } = await supabase
       .from("holiday_calendar")
-      .select("id, holiday_date")
+      .select("id, holiday_date, start_date, end_date")
       .eq("id", holidayId)
       .maybeSingle();
 
@@ -593,7 +606,8 @@ router.delete("/holidays/:id", async (req, res) => {
     await supabase
       .from("attendance_records")
       .delete()
-      .eq("attendance_date", holiday.holiday_date)
+      .gte("attendance_date", holiday.start_date || holiday.holiday_date)
+      .lte("attendance_date", holiday.end_date || holiday.holiday_date)
       .eq("status", "holiday")
       .eq("marked_by_role", "system");
 
@@ -625,8 +639,9 @@ router.post("/records", async (req, res) => {
 
     await ensureTeacherAssignment(req.user, className, section, academicYear);
 
-    if (isFriday(attendanceDate) || (await isCalendarHoliday(attendanceDate))) {
-      const saved = await ensureFridayHolidayForScope({
+    const calendarHoliday = await isCalendarHoliday(attendanceDate);
+    if (isFriday(attendanceDate) || calendarHoliday) {
+      const saved = await ensureHolidayForScope({
         attendanceDate,
         className,
         section,
