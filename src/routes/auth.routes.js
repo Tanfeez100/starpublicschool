@@ -1,5 +1,5 @@
 import express from "express";
-import { supabase, getRoleCached } from "../services/supabase.js";
+import { supabase, supabaseAuth, getRoleCached } from "../services/supabase.js";
 import { createClient } from "@supabase/supabase-js";
 import { adminOnly } from "../middleware/auth.middleware.js";
 
@@ -48,6 +48,8 @@ const supabaseAdmin = createClient(
 );
 
 const router = express.Router();
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const createHttpError = (status, message, detail = null) => {
   const err = new Error(message);
@@ -59,6 +61,65 @@ const createHttpError = (status, message, detail = null) => {
 };
 
 const normalizeRole = (role) => String(role || "").trim().toLowerCase();
+const sanitizeString = (value) => (typeof value === "string" ? value.trim() : value);
+const isValidUuid = (value) => UUID_REGEX.test(String(value || ""));
+
+const getDefaultAcademicYear = () => {
+  const now = new Date();
+  const currentYear = now.getMonth() >= 2 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${currentYear}-${String(currentYear + 1).slice(-2)}`;
+};
+
+const normalizeAcademicYear = (value) => {
+  const normalized = sanitizeString(value);
+  if (!normalized) return getDefaultAcademicYear();
+  if (!/^\d{4}-(\d{2}|\d{4})$/.test(normalized)) {
+    throw createHttpError(400, "academic_year must be in format YYYY-YY or YYYY-YYYY");
+  }
+  return normalized;
+};
+
+const getTeacherAssignmentMap = async (teacherIds = []) => {
+  if (!teacherIds.length) return new Map();
+
+  const { data, error } = await supabase
+    .from("teacher_assignments")
+    .select("teacher_id, class, section, academic_year, created_at, updated_at")
+    .in("teacher_id", teacherIds)
+    .order("class", { ascending: true })
+    .order("section", { ascending: true });
+
+  if (error) {
+    console.warn("Teacher assignment fetch skipped:", error.message);
+    return new Map();
+  }
+
+  return (data || []).reduce((map, row) => {
+    const rows = map.get(row.teacher_id) || [];
+    rows.push(row);
+    map.set(row.teacher_id, rows);
+    return map;
+  }, new Map());
+};
+
+const ensureTeacherRole = async (teacherId) => {
+  if (!isValidUuid(teacherId)) {
+    throw createHttpError(400, "Valid teacher ID is required");
+  }
+
+  const { data, error } = await supabase
+    .from("user_roles")
+    .select("user_id, role")
+    .eq("user_id", teacherId)
+    .eq("role", "teacher")
+    .single();
+
+  if (error || !data) {
+    throw createHttpError(404, "Teacher not found");
+  }
+
+  return data;
+};
 
 const createManagedUser = async ({ email, password, role }) => {
   if (!email || !password || !role) {
@@ -201,7 +262,7 @@ router.post("/login", async (req, res) => {
 
     // ⚡ OPTIMIZATION: Add retry logic for network resilience
     const { data, error } = await retryWithBackoff(() => 
-      supabase.auth.signInWithPassword({ email, password })
+      supabaseAuth.auth.signInWithPassword({ email, password })
     );
 
     if (error)
@@ -224,6 +285,11 @@ router.post("/login", async (req, res) => {
     // 4️⃣ SUCCESS
     // Calculate token expiration (30 minutes from now)
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const assignments =
+      role === "teacher"
+        ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
+        : [];
+    const assignment = assignments[0] || null;
     
     res.json({
       message: "Login successful",
@@ -231,6 +297,10 @@ router.post("/login", async (req, res) => {
         id: data.user.id,
         email: data.user.email,
         role: role, // Will be "admin" or "teacher"
+        assignedClass: assignment?.class || null,
+        assignedSection: assignment?.section || null,
+        academicYear: assignment?.academic_year || null,
+        assignments,
       },
       session: data.session,
       token_info: {
@@ -335,17 +405,185 @@ router.get("/teachers", adminOnly, async (req, res) => {
       role: "teacher",
       email: emailById.get(row.user_id) || null,
     }));
+    const assignmentByTeacherId = await getTeacherAssignmentMap(teacherIds);
+    const teachersWithAssignments = teachers.map((teacher) => {
+      const assignments = assignmentByTeacherId.get(teacher.id) || [];
+      const assignment = assignments[0] || null;
+      return {
+        ...teacher,
+        assignment,
+        assignments,
+        assignedClass: assignment?.class || null,
+        assignedSection: assignment?.section || null,
+        academicYear: assignment?.academic_year || null,
+      };
+    });
 
     return res.json({
       success: true,
-      count: teachers.length,
-      teachers,
+      count: teachersWithAssignments.length,
+      teachers: teachersWithAssignments,
     });
   } catch (err) {
     console.error("Get teachers error:", err);
     return res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
       error: err.message,
+    });
+  }
+});
+
+const saveTeacherAssignment = async (req, res) => {
+  try {
+    const teacherId = req.params.id;
+    const assignedClass = sanitizeString(req.body?.class || req.body?.assignedClass);
+    const assignedSection = sanitizeString(req.body?.section || req.body?.assignedSection);
+    const academicYear = normalizeAcademicYear(req.body?.academic_year || req.body?.academicYear);
+
+    if (!assignedClass || !assignedSection) {
+      return res.status(400).json({
+        message: "class and section are required",
+      });
+    }
+
+    await ensureTeacherRole(teacherId);
+
+    const { data: occupiedAssignment, error: occupiedError } = await supabase
+      .from("teacher_assignments")
+      .select("teacher_id, class, section, academic_year")
+      .eq("class", assignedClass)
+      .eq("section", assignedSection)
+      .eq("academic_year", academicYear)
+      .neq("teacher_id", teacherId)
+      .limit(1);
+
+    if (occupiedError) {
+      return res.status(500).json({
+        message: "Failed to check existing teacher assignment",
+        error: occupiedError.message,
+      });
+    }
+
+    if (Array.isArray(occupiedAssignment) && occupiedAssignment.length > 0) {
+      return res.status(409).json({
+        message: `Class ${assignedClass} section ${assignedSection} is already assigned for ${academicYear}`,
+      });
+    }
+
+    const assignmentPayload = {
+      class: assignedClass,
+      section: assignedSection,
+      academic_year: academicYear,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data: existingAssignment, error: existingError } = await supabase
+      .from("teacher_assignments")
+      .select("teacher_id, class, section, academic_year")
+      .eq("teacher_id", teacherId)
+      .eq("class", assignedClass)
+      .eq("section", assignedSection)
+      .eq("academic_year", academicYear)
+      .limit(1);
+
+    if (existingError) {
+      return res.status(500).json({
+        message: "Failed to check previous teacher assignment",
+        error: existingError.message,
+      });
+    }
+
+    const hasExistingAssignment = Array.isArray(existingAssignment) && existingAssignment.length > 0;
+    const assignmentQuery = hasExistingAssignment
+      ? supabase
+          .from("teacher_assignments")
+          .update(assignmentPayload)
+          .eq("teacher_id", teacherId)
+          .eq("class", assignedClass)
+          .eq("section", assignedSection)
+          .eq("academic_year", academicYear)
+          .select("teacher_id, class, section, academic_year, created_at, updated_at")
+          .single()
+      : supabase
+          .from("teacher_assignments")
+          .insert([
+            {
+              teacher_id: teacherId,
+              ...assignmentPayload,
+            },
+          ])
+          .select("teacher_id, class, section, academic_year, created_at, updated_at")
+          .single();
+
+    const { data: assignment, error } = await assignmentQuery;
+
+    if (error) {
+      const isDuplicate = error.code === "23505" || /duplicate key/i.test(error.message || "");
+      if (isDuplicate) {
+        return res.status(409).json({
+          message: `Class ${assignedClass} section ${assignedSection} is already assigned for ${academicYear}`,
+        });
+      }
+
+      return res.status(500).json({
+        message: "Failed to save teacher assignment",
+        error: error.message,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: hasExistingAssignment ? "Teacher assignment already saved" : "Teacher assigned successfully",
+      assignment,
+    });
+  } catch (err) {
+    console.error("Teacher assignment error:", err);
+    return res.status(err.status || 500).json({
+      message: err.message || "Failed to save teacher assignment",
+      ...(err.detail ? { error: err.detail } : {}),
+    });
+  }
+};
+
+router.post("/teachers/:id/assignment", adminOnly, saveTeacherAssignment);
+router.patch("/teachers/:id/assignment", adminOnly, saveTeacherAssignment);
+
+router.delete("/teachers/:id/assignment", adminOnly, async (req, res) => {
+  try {
+    const teacherId = req.params.id;
+    await ensureTeacherRole(teacherId);
+    const assignedClass = sanitizeString(req.query?.class || req.query?.assignedClass);
+    const assignedSection = sanitizeString(req.query?.section || req.query?.assignedSection);
+    const academicYear = req.query?.academic_year || req.query?.academicYear
+      ? normalizeAcademicYear(req.query?.academic_year || req.query?.academicYear)
+      : "";
+
+    let query = supabase
+      .from("teacher_assignments")
+      .delete()
+      .eq("teacher_id", teacherId);
+
+    if (assignedClass) query = query.eq("class", assignedClass);
+    if (assignedSection) query = query.eq("section", assignedSection);
+    if (academicYear) query = query.eq("academic_year", academicYear);
+
+    const { error } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        message: "Failed to remove teacher assignment",
+        error: error.message,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Teacher assignment removed",
+    });
+  } catch (err) {
+    console.error("Remove teacher assignment error:", err);
+    return res.status(err.status || 500).json({
+      message: err.message || "Failed to remove teacher assignment",
     });
   }
 });
@@ -582,7 +820,7 @@ router.post("/logout", async (req, res) => {
     const token = authHeader.split(" ")[1];
 
     // ⚡ OPTIMIZATION: Verify token with proper Supabase auth
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
 
     if (error || !user) {
       // Token already invalid/expired, but still return success
@@ -643,7 +881,7 @@ router.post("/refresh", async (req, res) => {
       const accessToken = authHeader.split(" ")[1];
       
       // Get user session to extract refresh token
-      const { data: { user }, error: userError } = await supabase.auth.getUser(accessToken);
+      const { data: { user }, error: userError } = await supabaseAuth.auth.getUser(accessToken);
       
       if (userError || !user) {
         return res.status(401).json({ 
@@ -665,7 +903,7 @@ router.post("/refresh", async (req, res) => {
     }
 
     // Refresh the session
-    const { data, error } = await supabase.auth.refreshSession({
+    const { data, error } = await supabaseAuth.auth.refreshSession({
       refresh_token: token,
     });
 
@@ -691,6 +929,11 @@ router.post("/refresh", async (req, res) => {
         message: "Role not assigned" 
       });
     }
+    const assignments =
+      roleData.role === "teacher"
+        ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
+        : [];
+    const assignment = assignments[0] || null;
 
     res.json({
       success: true,
@@ -699,6 +942,10 @@ router.post("/refresh", async (req, res) => {
         id: data.user.id,
         email: data.user.email,
         role: roleData.role,
+        assignedClass: assignment?.class || null,
+        assignedSection: assignment?.section || null,
+        academicYear: assignment?.academic_year || null,
+        assignments,
       },
       session: data.session,
       token_info: {

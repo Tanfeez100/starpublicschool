@@ -13,6 +13,14 @@ const ROLL_CONFLICT_ERROR_CODE = "ROLL_CONFLICT";
 const ACADEMIC_YEAR_REGEX = /^\d{4}-(\d{2}|\d{4})$/;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const STUDENT_SELECT_BASE =
+  "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge, aadhaar_card, pen_number, photo_url";
+const STUDENT_SELECT_WITH_ADMISSION =
+  "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge, aadhaar_card, pen_number, admission_number, admission_date, photo_url";
+const STUDENT_LIST_SELECT_BASE =
+  "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport, aadhaar_card, pen_number, photo_url";
+const STUDENT_LIST_SELECT_WITH_ADMISSION =
+  "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport, aadhaar_card, pen_number, admission_number, admission_date, photo_url";
 
 const sanitizeString = (value) =>
   typeof value === "string" ? value.trim() : value;
@@ -20,6 +28,14 @@ const sanitizeString = (value) =>
 const isUniqueViolation = (error) =>
   error?.code === "23505" ||
   String(error?.message || "").toLowerCase().includes("duplicate key");
+
+const isMissingAdmissionColumnError = (error) => {
+  const text = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
+  return (
+    (text.includes("admission_number") || text.includes("admission_date")) &&
+    (text.includes("column") || text.includes("schema cache") || text.includes("pgrst"))
+  );
+};
 
 const isValidUuid = (value) => UUID_REGEX.test(String(value || ""));
 
@@ -156,6 +172,19 @@ const checkRollConflictForActiveStudent = async ({
   return Array.isArray(data) && data.length > 0;
 };
 
+const getTeacherAssignments = async (teacherId) => {
+  const { data, error } = await supabase
+    .from("teacher_assignments")
+    .select("teacher_id, class, section, academic_year")
+    .eq("teacher_id", teacherId);
+
+  if (error) {
+    throw new Error(`Failed to fetch teacher assignments: ${error.message}`);
+  }
+
+  return data || [];
+};
+
 const parseBooleanQuery = (value, defaultValue = false) => {
   if (value === undefined) return defaultValue;
   if (typeof value === "boolean") return value;
@@ -186,26 +215,34 @@ router.get("/all", adminOrTeacher, async (req, res) => {
     const academicYear = normalizeAcademicYear(academicYearRaw);
     const status = normalizeStatus(statusRaw);
 
-    let query = supabase
-      .from("students")
-      .select(
-        "id, name, father_name, mother_name, gender, class, section, roll_no, academic_year, status, left_date, mobile, address, uses_transport, transport_charge, aadhaar_card, pen_number, photo_url"
-      )
-      .order("class", { ascending: true })
-      .order("section", { ascending: true })
-      .order("roll_no", { ascending: true });
+    const buildQuery = (selectColumns) => {
+      let query = supabase
+        .from("students")
+        .select(selectColumns)
+        .order("class", { ascending: true })
+        .order("section", { ascending: true })
+        .order("roll_no", { ascending: true });
 
-    if (cls) query = query.eq("class", String(cls).trim());
-    if (section) query = query.eq("section", String(section).trim());
-    if (academicYear) query = query.eq("academic_year", academicYear);
+      if (cls) query = query.eq("class", String(cls).trim());
+      if (section) query = query.eq("section", String(section).trim());
+      if (academicYear) query = query.eq("academic_year", academicYear);
 
-    if (status) {
-      query = query.eq("status", status);
-    } else if (!includeInactive) {
-      query = query.eq("status", STUDENT_STATUS.ACTIVE);
+      if (status) {
+        query = query.eq("status", status);
+      } else if (!includeInactive) {
+        query = query.eq("status", STUDENT_STATUS.ACTIVE);
+      }
+
+      return query;
+    };
+
+    let result = await buildQuery(STUDENT_SELECT_WITH_ADMISSION);
+    if (result.error && isMissingAdmissionColumnError(result.error)) {
+      console.warn("Admission columns missing in students table; using fallback select.");
+      result = await buildQuery(STUDENT_SELECT_BASE);
     }
 
-    const { data: students, error } = await query;
+    const { data: students, error } = result;
 
     if (error) {
       return res.status(500).json({
@@ -229,6 +266,8 @@ router.get("/all", adminOrTeacher, async (req, res) => {
       Mobile: student.mobile || "",
       Aadhaar: student.aadhaar_card || "",
       PenNumber: student.pen_number || "",
+      AdmissionNumber: student.admission_number || "",
+      AdmissionDate: student.admission_date || "",
       PhotoUrl: student.photo_url || "",
       Address: student.address || "",
       Transport: student.uses_transport
@@ -315,32 +354,79 @@ router.get("/", adminOrTeacher, async (req, res) => {
       include_inactive,
     } = req.query;
 
-    if (!cls) {
-      return res.status(400).json({ message: "class is required" });
-    }
-
     const includeInactive = parseBooleanQuery(include_inactive, false);
     const academicYear = normalizeAcademicYear(academicYearRaw);
+    let teacherAssignments = [];
+    let teacherAssignment = null;
 
-    let query = supabase
-      .from("students")
-      .select(
-        "id, name, father_name, mobile, address, class, roll_no, section, academic_year, status, left_date, uses_transport, aadhaar_card, pen_number, photo_url"
-      )
-      .eq("class", String(cls).trim())
-      .order("roll_no");
+    if (req.user?.role === "teacher") {
+      teacherAssignments = await getTeacherAssignments(req.user.id);
+      if (!teacherAssignments.length) {
+        return res.status(403).json({
+          success: false,
+          message: "Teacher is not assigned to any class/section.",
+        });
+      }
 
-    if (section) query = query.eq("section", String(section).trim());
-    if (academicYear) query = query.eq("academic_year", academicYear);
-    if (!includeInactive) query = query.eq("status", STUDENT_STATUS.ACTIVE);
+      const requestedClass = cls ? String(cls).trim() : "";
+      const requestedSection = section ? String(section).trim() : "";
+      const requestedYear = academicYear || "";
+      teacherAssignment = teacherAssignments.find((assignment) => {
+        const classMatches = requestedClass ? requestedClass === assignment.class : true;
+        const sectionMatches = requestedSection ? requestedSection === assignment.section : true;
+        const yearMatches = requestedYear ? requestedYear === assignment.academic_year : true;
+        return classMatches && sectionMatches && yearMatches;
+      }) || null;
 
-    const { data: students, error } = await query;
+      if (!teacherAssignment) {
+        return res.status(403).json({
+          success: false,
+          message: "Teacher can access only assigned class/section.",
+        });
+      }
+    }
+
+    const buildQuery = (selectColumns) => {
+      let query = supabase
+        .from("students")
+        .select(selectColumns)
+        .order("roll_no", { ascending: true });
+
+      if (teacherAssignment) {
+        query = query
+          .eq("class", teacherAssignment.class)
+          .eq("section", teacherAssignment.section)
+          .eq("academic_year", teacherAssignment.academic_year);
+      } else {
+        if (cls) query = query.eq("class", String(cls).trim());
+        if (section) query = query.eq("section", String(section).trim());
+        if (academicYear) query = query.eq("academic_year", academicYear);
+      }
+      if (!includeInactive) query = query.eq("status", STUDENT_STATUS.ACTIVE);
+
+      return query;
+    };
+
+    let result = await buildQuery(STUDENT_LIST_SELECT_WITH_ADMISSION);
+    if (result.error && isMissingAdmissionColumnError(result.error)) {
+      console.warn("Admission columns missing in students table; using fallback list select.");
+      result = await buildQuery(STUDENT_LIST_SELECT_BASE);
+    }
+
+    const { data: students, error } = result;
 
     if (error) {
       return res.status(500).json({ message: error.message });
     }
 
     const studentIds = (students || []).map((s) => s.id);
+    if (studentIds.length === 0) {
+      return res.json({
+        success: true,
+        count: 0,
+        students: [],
+      });
+    }
 
     const { data: allDuesRows } = await supabase
       .from("previous_dues")
@@ -392,7 +478,11 @@ router.get("/", adminOrTeacher, async (req, res) => {
       previous_due: previousDuesMap[s.id] || fallbackDuesMap[s.id] || 0,
     }));
 
-    res.json(studentsWithDue);
+    res.json({
+      success: true,
+      count: studentsWithDue.length,
+      students: studentsWithDue,
+    });
   } catch (err) {
     console.error("STUDENTS API ERROR:", err);
     res.status(500).json({ message: err.message });
@@ -419,6 +509,8 @@ router.post("/add", adminOnly, async (req, res) => {
       transport_charge,
       aadhaar_card,
       pen_number,
+      admission_number,
+      admission_date,
       photo_url,
     } = req.body;
 
@@ -450,33 +542,52 @@ router.post("/add", adminOnly, async (req, res) => {
     const normalizedUsesTransport = normalizeOptionalTransport(uses_transport);
     const normalizedAadhaar = normalizeAadhaarCard(aadhaar_card, { required: true });
     const normalizedPenNumber = normalizePenNumber(pen_number);
+    const normalizedAdmissionNumber = sanitizeString(admission_number) || null;
+    const normalizedAdmissionDate = normalizeDateOnly(admission_date, {
+      field: "admission_date",
+    });
 
-    const { data, error } = await supabase
+    const insertPayload = {
+      name: sanitizeString(name),
+      father_name: sanitizeString(father_name),
+      mother_name: sanitizeString(mother_name),
+      gender: sanitizeString(gender),
+      class: cls,
+      section,
+      roll_no: rollNo,
+      academic_year: academicYear,
+      status: STUDENT_STATUS.ACTIVE,
+      left_date: null,
+      mobile: sanitizeString(mobile),
+      aadhaar_card: normalizedAadhaar,
+      pen_number: normalizedPenNumber,
+      admission_number: normalizedAdmissionNumber,
+      admission_date: normalizedAdmissionDate,
+      photo_url: sanitizeString(photo_url) || null,
+      address: sanitizeString(address),
+      uses_transport: normalizedUsesTransport ?? false,
+      transport_charge:
+        normalizedUsesTransport === false ? null : transport_charge ?? null,
+    };
+
+    let insertResult = await supabase
       .from("students")
-      .insert([
-        {
-          name: sanitizeString(name),
-          father_name: sanitizeString(father_name),
-          mother_name: sanitizeString(mother_name),
-          gender: sanitizeString(gender),
-          class: cls,
-          section,
-          roll_no: rollNo,
-          academic_year: academicYear,
-          status: STUDENT_STATUS.ACTIVE,
-          left_date: null,
-          mobile: sanitizeString(mobile),
-          aadhaar_card: normalizedAadhaar,
-          pen_number: normalizedPenNumber,
-          photo_url: sanitizeString(photo_url) || null,
-          address: sanitizeString(address),
-          uses_transport: normalizedUsesTransport ?? false,
-          transport_charge:
-            normalizedUsesTransport === false ? null : transport_charge ?? null,
-        },
-      ])
+      .insert([insertPayload])
       .select("id, class, section, roll_no, academic_year, status")
       .single();
+
+    if (insertResult.error && isMissingAdmissionColumnError(insertResult.error)) {
+      const fallbackPayload = { ...insertPayload };
+      delete fallbackPayload.admission_number;
+      delete fallbackPayload.admission_date;
+      insertResult = await supabase
+        .from("students")
+        .insert([fallbackPayload])
+        .select("id, class, section, roll_no, academic_year, status")
+        .single();
+    }
+
+    const { data, error } = insertResult;
 
     if (error) {
       if (isUniqueViolation(error)) {
@@ -501,7 +612,8 @@ router.post("/add", adminOnly, async (req, res) => {
     if (
       err.message.includes("roll_no") ||
       err.message.includes("academic_year") ||
-      err.message.includes("pen_number")
+      err.message.includes("pen_number") ||
+      err.message.includes("admission_date")
     ) {
       return res.status(400).json({ message: err.message });
     }
@@ -530,6 +642,8 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
       address,
       aadhaar_card,
       pen_number,
+      admission_number,
+      admission_date,
       photo_url,
       class: clsRaw,
       roll_no: rollNoRaw,
@@ -635,6 +749,12 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
     if (address !== undefined) updateData.address = sanitizeString(address);
     if (aadhaar_card !== undefined) updateData.aadhaar_card = normalizeAadhaarCard(aadhaar_card);
     if (pen_number !== undefined) updateData.pen_number = normalizePenNumber(pen_number);
+    if (admission_number !== undefined) updateData.admission_number = sanitizeString(admission_number) || null;
+    if (admission_date !== undefined) {
+      updateData.admission_date = normalizeDateOnly(admission_date, {
+        field: "admission_date",
+      });
+    }
     if (photo_url !== undefined) updateData.photo_url = sanitizeString(photo_url) || null;
 
     const normalizedUsesTransport = normalizeOptionalTransport(uses_transport);
@@ -649,12 +769,26 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
       updateData.transport_charge = transport_charge;
     }
 
-    const { data: updatedStudent, error } = await supabase
+    let updateResult = await supabase
       .from("students")
       .update(updateData)
       .eq("id", id)
       .select()
       .single();
+
+    if (updateResult.error && isMissingAdmissionColumnError(updateResult.error)) {
+      const fallbackUpdateData = { ...updateData };
+      delete fallbackUpdateData.admission_number;
+      delete fallbackUpdateData.admission_date;
+      updateResult = await supabase
+        .from("students")
+        .update(fallbackUpdateData)
+        .eq("id", id)
+        .select()
+        .single();
+    }
+
+    const { data: updatedStudent, error } = updateResult;
 
     if (error) {
       if (isUniqueViolation(error)) {
@@ -686,7 +820,8 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
       err.message.includes("academic_year") ||
       err.message.includes("pen_number") ||
       err.message.includes("status") ||
-      err.message.includes("left_date")
+      err.message.includes("left_date") ||
+      err.message.includes("admission_date")
     ) {
       return res.status(400).json({ message: err.message });
     }

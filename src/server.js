@@ -13,6 +13,8 @@ import megaRoutes from "./routes/mega.routes.js";
 import promotionRoutes from "./routes/promotion.routes.js";
 import migrationRoutes from "./routes/migration.routes.js";
 import publicFeesRoutes from "./routes/publicFees.routes.js";
+import attendanceRoutes from "./routes/attendance.routes.js";
+import studentAuthRoutes from "./routes/student-auth.routes.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
 console.log(
@@ -20,8 +22,17 @@ console.log(
   process.env.SUPABASE_SERVICE_KEY ? "OK" : "MISSING"
 );
 
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    message: "Backend server is running",
+    time: new Date().toISOString(),
+  });
+});
+
 // Register all routes
 app.use("/api/auth", authRoutes);
+app.use("/api/student-auth", studentAuthRoutes);
 app.use("/api/students", studentsRoutes);
 app.use("/api/marks", marksRoutes);
 app.use("/api/result", resultRoutes);
@@ -36,6 +47,7 @@ app.use("/api/invoice", invoiceRoutes);
 app.use("/api/public-fees", publicFeesRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/migration", migrationRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 // MEGA Image Storage Routes
 app.use("/api/mega", megaRoutes);
