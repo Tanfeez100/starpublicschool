@@ -4,7 +4,7 @@ import { authenticate } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-const ATTENDANCE_STATUSES = new Set(["present", "absent", "late", "holiday"]);
+const ATTENDANCE_STATUSES = new Set(["present", "absent", "late"]);
 const ACADEMIC_YEAR_REGEX = /^\d{4}-(\d{2}|\d{4})$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -146,18 +146,24 @@ const getDatesInRange = (start, end) => {
   return dates;
 };
 
-const getTeacherAssignment = async (teacherId) => {
+const getTeacherAssignments = async (teacherId) => {
   const { data, error } = await supabase
     .from("teacher_assignments")
     .select("teacher_id, class, section, academic_year")
     .eq("teacher_id", teacherId)
-    .maybeSingle();
+    .order("class", { ascending: true })
+    .order("section", { ascending: true });
 
   if (error) {
     throw new Error(error.message);
   }
 
-  return data || null;
+  return data || [];
+};
+
+const getTeacherAssignment = async (teacherId) => {
+  const assignments = await getTeacherAssignments(teacherId);
+  return assignments[0] || null;
 };
 
 const createTeacherAssignmentMissingError = (user) => {
@@ -173,17 +179,19 @@ const createTeacherAssignmentMissingError = (user) => {
 const ensureTeacherAssignment = async (user, className, section, academicYear) => {
   if (user.role !== "teacher") return null;
 
-  const assignment = await getTeacherAssignment(user.id);
-  if (!assignment) {
+  const assignments = await getTeacherAssignments(user.id);
+  if (!assignments.length) {
     throw createTeacherAssignmentMissingError(user);
   }
 
-  const mismatch =
-    assignment.class !== className ||
-    assignment.section !== section ||
-    assignment.academic_year !== academicYear;
+  const assignment = assignments.find(
+    (item) =>
+      item.class === className &&
+      item.section === section &&
+      item.academic_year === academicYear
+  );
 
-  if (mismatch) {
+  if (!assignment) {
     const err = new Error("Teacher can access only assigned class/section.");
     err.status = 403;
     throw err;
@@ -219,44 +227,31 @@ const fetchActiveStudentsForAttendance = async ({
   return data || [];
 };
 
-const upsertHolidayRows = async (attendanceDate, students = []) => {
-  if (!students.length) return [];
+const deleteAttendanceRowsForScope = async ({
+  attendanceDate = null,
+  startDate = null,
+  endDate = null,
+  className = null,
+  section = null,
+  academicYear = null,
+  studentId = null,
+} = {}) => {
+  let query = supabase.from("attendance_records").delete();
 
-  const studentIds = students.map((student) => student.id).filter(Boolean);
-  const { data: existingRows, error: existingError } = await supabase
-    .from("attendance_records")
-    .select("student_id")
-    .eq("attendance_date", attendanceDate)
-    .in("student_id", studentIds);
-
-  if (existingError) {
-    throw new Error(existingError.message);
+  if (attendanceDate) {
+    query = query.eq("attendance_date", attendanceDate);
+  } else if (startDate && endDate) {
+    query = query.gte("attendance_date", startDate).lte("attendance_date", endDate);
+  } else {
+    return [];
   }
 
-  const existingStudentIds = new Set((existingRows || []).map((row) => row.student_id));
-  const rows = students
-    .filter((student) => !existingStudentIds.has(student.id))
-    .map((student) => ({
-    attendance_date: attendanceDate,
-    student_id: student.id,
-    class: student.class,
-    section: student.section,
-    academic_year: student.academic_year,
-    status: "holiday",
-    marked_by: null,
-    marked_by_role: "system",
-    remarks: "Auto Friday holiday",
-  }));
+  if (studentId) query = query.eq("student_id", studentId);
+  if (className) query = query.eq("class", className);
+  if (section) query = query.eq("section", section);
+  if (academicYear) query = query.eq("academic_year", academicYear);
 
-  if (!rows.length) return [];
-
-  const { data, error } = await supabase
-    .from("attendance_records")
-    .insert(rows)
-    .select(
-      "id, attendance_date, student_id, class, section, academic_year, status, marked_by, marked_by_role, remarks, created_at, updated_at"
-    );
-
+  const { data, error } = await query.select("id");
   if (error) {
     throw new Error(error.message);
   }
@@ -300,43 +295,31 @@ const isCalendarHoliday = async (attendanceDate) => {
   return Array.isArray(data) && data.length > 0;
 };
 
-const ensureHolidayForScope = async ({
-  attendanceDate,
-  className = null,
-  section = null,
-  academicYear = null,
-  studentId = null,
-} = {}) => {
-  const students = await fetchActiveStudentsForAttendance({
-    className,
-    section,
-    academicYear,
-    studentId,
-  });
-
-  return upsertHolidayRows(attendanceDate, students);
-};
-
-const ensureFridayHolidayForScope = async (options = {}) => {
-  if (!isFriday(options.attendanceDate)) return [];
-  return ensureHolidayForScope(options);
-};
-
 const applyRoleRestrictions = async (query, user) => {
   if (user.role === "student") {
     return query.eq("student_id", user.id);
   }
 
   if (user.role === "teacher") {
-    const assignment = await getTeacherAssignment(user.id);
-    if (!assignment) {
+    const assignments = await getTeacherAssignments(user.id);
+    if (!assignments.length) {
       throw createTeacherAssignmentMissingError(user);
     }
 
-    return query
-      .eq("class", assignment.class)
-      .eq("section", assignment.section)
-      .eq("academic_year", assignment.academic_year);
+    if (assignments.length === 1) {
+      const assignment = assignments[0];
+      return query
+        .eq("class", assignment.class)
+        .eq("section", assignment.section)
+        .eq("academic_year", assignment.academic_year);
+    }
+
+    const assignmentFilter = assignments
+      .map((assignment) =>
+        `and(class.eq.${assignment.class},section.eq.${assignment.section},academic_year.eq.${assignment.academic_year})`
+      )
+      .join(",");
+    return query.or(assignmentFilter);
   }
 
   return query;
@@ -377,13 +360,15 @@ router.get("/bootstrap", async (req, res) => {
     let classes = [];
     let sections = [];
     let assignment = null;
+    let assignments = [];
     let message = "";
 
     if (req.user.role === "teacher") {
-      assignment = await getTeacherAssignment(req.user.id);
-      if (assignment) {
-        classes = [assignment.class];
-        sections = [assignment.section];
+      assignments = await getTeacherAssignments(req.user.id);
+      assignment = assignments[0] || null;
+      if (assignments.length) {
+        classes = [...new Set(assignments.map((item) => item.class).filter(Boolean))];
+        sections = [...new Set(assignments.map((item) => item.section).filter(Boolean))];
       } else {
         message = "Teacher is not assigned to any class/section.";
       }
@@ -415,6 +400,7 @@ router.get("/bootstrap", async (req, res) => {
         classes,
         sections,
         assignment,
+        assignments,
         users: [],
         attendance: {},
         message,
@@ -424,6 +410,8 @@ router.get("/bootstrap", async (req, res) => {
     let recordsQuery = supabase
       .from("attendance_records")
       .select("student_id, attendance_date, status")
+      .neq("status", "holiday")
+      .eq("academic_year", getDefaultAcademicYear())
       .order("attendance_date", { ascending: false })
       .limit(2500);
 
@@ -436,6 +424,7 @@ router.get("/bootstrap", async (req, res) => {
       classes,
       sections,
       assignment,
+      assignments,
       users: [],
       attendance: toAttendanceMap(records || []),
       message,
@@ -534,8 +523,6 @@ router.post("/holidays", async (req, res) => {
     const holidayDates = getDatesInRange(startDate, endDate);
     const title = sanitizeString(req.body?.title) || "Holiday";
     const description = sanitizeString(req.body?.description) || null;
-    const applyToAttendance = req.body?.apply_to_attendance !== false;
-
     const holidayRow = {
       holiday_date: startDate,
       start_date: startDate,
@@ -554,14 +541,10 @@ router.post("/holidays", async (req, res) => {
 
     if (error) return sendError(res, 500, getHolidayTableErrorMessage(error));
 
-    let savedAttendance = [];
-    if (applyToAttendance) {
-      const students = await fetchActiveStudentsForAttendance();
-      const savedGroups = await Promise.all(
-        holidayDates.map((holidayDate) => upsertHolidayRows(holidayDate, students))
-      );
-      savedAttendance = savedGroups.flat();
-    }
+    const deletedGroups = await Promise.all(
+      holidayDates.map((holidayDate) => deleteAttendanceRowsForScope({ attendanceDate: holidayDate }))
+    );
+    const deletedAttendance = deletedGroups.flat();
 
     res.json({
       success: true,
@@ -572,13 +555,79 @@ router.post("/holidays", async (req, res) => {
       holiday: holidays?.[0] ? { ...holidays[0], type: "manual" } : null,
       holidays: (holidays || []).map((holiday) => ({ ...holiday, type: "manual" })),
       count: holidays?.length || 0,
-      savedAttendance,
+      deletedAttendance,
+      deletedAttendanceCount: deletedAttendance.length,
     });
   } catch (err) {
     console.error("Save holiday error:", err);
     sendError(res, err.status || 500, toHumanErrorMessage(err, "Failed to save holiday"));
   }
 });
+
+const updateHoliday = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return sendError(res, 403, "Only admin can edit calendar holidays.");
+    }
+
+    const holidayId = sanitizeString(req.params.id);
+    const { data: existingHoliday, error: fetchError } = await supabase
+      .from("holiday_calendar")
+      .select("id")
+      .eq("id", holidayId)
+      .maybeSingle();
+
+    if (fetchError) return sendError(res, 500, getHolidayTableErrorMessage(fetchError));
+    if (!existingHoliday) return sendError(res, 404, "Holiday not found.");
+
+    const startDate = normalizeDate(
+      req.body?.start_date || req.body?.from || req.body?.date || req.body?.holiday_date,
+      "start_date"
+    );
+    const endDate = normalizeDate(
+      req.body?.end_date || req.body?.to || req.body?.date || req.body?.holiday_date || startDate,
+      "end_date"
+    );
+    const holidayDates = getDatesInRange(startDate, endDate);
+    const title = sanitizeString(req.body?.title) || "Holiday";
+    const description = sanitizeString(req.body?.description) || null;
+
+    const { data: holiday, error } = await supabase
+      .from("holiday_calendar")
+      .update({
+        holiday_date: startDate,
+        start_date: startDate,
+        end_date: endDate,
+        title,
+        description,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", holidayId)
+      .select("id, holiday_date, start_date, end_date, title, description, created_by, created_at, updated_at")
+      .single();
+
+    if (error) return sendError(res, 500, getHolidayTableErrorMessage(error));
+
+    const deletedGroups = await Promise.all(
+      holidayDates.map((holidayDate) => deleteAttendanceRowsForScope({ attendanceDate: holidayDate }))
+    );
+    const deletedAttendance = deletedGroups.flat();
+
+    res.json({
+      success: true,
+      message: "Holiday updated successfully.",
+      holiday: holiday ? { ...holiday, type: "manual" } : null,
+      deletedAttendance,
+      deletedAttendanceCount: deletedAttendance.length,
+    });
+  } catch (err) {
+    console.error("Update holiday error:", err);
+    sendError(res, err.status || 500, toHumanErrorMessage(err, "Failed to update holiday"));
+  }
+};
+
+router.put("/holidays/:id", updateHoliday);
+router.patch("/holidays/:id", updateHoliday);
 
 router.delete("/holidays/:id", async (req, res) => {
   try {
@@ -641,7 +690,7 @@ router.post("/records", async (req, res) => {
 
     const calendarHoliday = await isCalendarHoliday(attendanceDate);
     if (isFriday(attendanceDate) || calendarHoliday) {
-      const saved = await ensureHolidayForScope({
+      const deletedAttendance = await deleteAttendanceRowsForScope({
         attendanceDate,
         className,
         section,
@@ -651,9 +700,12 @@ router.post("/records", async (req, res) => {
       return res.json({
         success: true,
         message: isFriday(attendanceDate)
-          ? "Friday holiday marked automatically."
-          : "Calendar holiday marked automatically.",
-        saved,
+          ? "Friday holiday hai. Is date ka attendance record save nahi hoga."
+          : "Calendar holiday hai. Is date ka attendance record save nahi hoga.",
+        isHoliday: true,
+        saved: [],
+        deletedAttendance,
+        deletedAttendanceCount: deletedAttendance.length,
       });
     }
 
@@ -739,31 +791,44 @@ router.get("/records", async (req, res) => {
       .select(
         "id, attendance_date, student_id, class, section, academic_year, status, marked_by, marked_by_role, remarks, created_at, updated_at"
       )
+      .neq("status", "holiday")
       .order("attendance_date", { ascending: false });
 
     const attendanceDate = date ? normalizeDate(date, "date") : null;
     const className = classNameRaw ? sanitizeString(classNameRaw) : null;
     const section = sectionRaw ? sanitizeString(sectionRaw) : null;
-    const academicYear = academicYearRaw ? normalizeAcademicYear(academicYearRaw) : null;
+    const academicYear = normalizeAcademicYear(academicYearRaw);
+    const isHolidayDate = attendanceDate
+      ? isFriday(attendanceDate) || (await isCalendarHoliday(attendanceDate))
+      : false;
 
-    if (attendanceDate && (isFriday(attendanceDate) || (await isCalendarHoliday(attendanceDate)))) {
+    if (isHolidayDate) {
       if (req.user.role === "teacher") {
-        const assignment = await getTeacherAssignment(req.user.id);
-        if (assignment) {
-          await ensureFridayHolidayForScope({
+        const assignments = await getTeacherAssignments(req.user.id);
+        const scopedAssignments = className && section && academicYear
+          ? assignments.filter(
+              (assignment) =>
+                assignment.class === className &&
+                assignment.section === section &&
+                assignment.academic_year === academicYear
+            )
+          : assignments;
+
+        await Promise.all(
+          scopedAssignments.map((assignment) => deleteAttendanceRowsForScope({
             attendanceDate,
             className: assignment.class,
             section: assignment.section,
             academicYear: assignment.academic_year,
-          });
-        }
+          }))
+        );
       } else if (req.user.role === "student") {
-        await ensureFridayHolidayForScope({
+        await deleteAttendanceRowsForScope({
           attendanceDate,
           studentId: req.user.id,
         });
       } else {
-        await ensureFridayHolidayForScope({
+        await deleteAttendanceRowsForScope({
           attendanceDate,
           className,
           section,
@@ -789,6 +854,7 @@ router.get("/records", async (req, res) => {
       count: data?.length || 0,
       records: data || [],
       attendance: toAttendanceMap(data || []),
+      isHoliday: isHolidayDate,
     });
   } catch (err) {
     console.error("Get attendance records error:", {
@@ -821,20 +887,13 @@ router.get("/students/:studentId", async (req, res) => {
       await ensureTeacherAssignment(req.user, student.class, student.section, student.academic_year);
     }
 
-    const todayDate = new Date().toISOString().split("T")[0];
-    if (isFriday(todayDate)) {
-      await ensureFridayHolidayForScope({
-        attendanceDate: todayDate,
-        studentId,
-      });
-    }
-
     let query = supabase
       .from("attendance_records")
       .select(
         "id, attendance_date, student_id, class, section, academic_year, status, marked_by, marked_by_role, remarks, created_at, updated_at"
       )
       .eq("student_id", studentId)
+      .neq("status", "holiday")
       .order("attendance_date", { ascending: false });
 
     query = await applyRoleRestrictions(query, req.user);

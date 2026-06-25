@@ -279,18 +279,17 @@ const fetchClassSubjectsWithFallback = async (className, section) => {
   return { classSubjects, csError };
 };
 
-const getTeacherAssignment = async (teacherId) => {
+const getTeacherAssignments = async (teacherId) => {
   const { data, error } = await supabase
     .from("teacher_assignments")
     .select("teacher_id, class, section, academic_year")
-    .eq("teacher_id", teacherId)
-    .maybeSingle();
+    .eq("teacher_id", teacherId);
 
   if (error) {
-    throw new Error(`Failed to fetch teacher assignment: ${error.message}`);
+    throw new Error(`Failed to fetch teacher assignments: ${error.message}`);
   }
 
-  return data || null;
+  return data || [];
 };
 
 const ensureTeacherCanAccessClassSection = async ({
@@ -301,22 +300,24 @@ const ensureTeacherCanAccessClassSection = async ({
 }) => {
   if (user?.role !== "teacher") return null;
 
-  const assignment = await getTeacherAssignment(user.id);
-  if (!assignment) {
+  const assignments = await getTeacherAssignments(user.id);
+  if (!assignments.length) {
     const error = new Error("Teacher is not assigned to any class/section.");
     error.status = 403;
     throw error;
   }
 
-  const requestedYear = academicYear ? String(academicYear).trim() : assignment.academic_year;
-  const mismatch =
-    String(className || "").trim() !== assignment.class ||
-    String(section || "").trim() !== assignment.section ||
-    requestedYear !== assignment.academic_year;
+  const requestedYear = academicYear ? String(academicYear).trim() : null;
+  const assignment = assignments.find(
+    (item) =>
+      String(className || "").trim() === item.class &&
+      String(section || "").trim() === item.section &&
+      (requestedYear || item.academic_year) === item.academic_year
+  );
 
-  if (mismatch) {
+  if (!assignment) {
     const error = new Error(
-      `Teacher can submit/view marks only for assigned class ${assignment.class}, section ${assignment.section}, ${assignment.academic_year}.`
+      "Teacher can submit/view marks only for assigned class/section."
     );
     error.status = 403;
     throw error;

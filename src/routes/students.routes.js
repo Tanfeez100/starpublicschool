@@ -172,18 +172,17 @@ const checkRollConflictForActiveStudent = async ({
   return Array.isArray(data) && data.length > 0;
 };
 
-const getTeacherAssignment = async (teacherId) => {
+const getTeacherAssignments = async (teacherId) => {
   const { data, error } = await supabase
     .from("teacher_assignments")
     .select("teacher_id, class, section, academic_year")
-    .eq("teacher_id", teacherId)
-    .maybeSingle();
+    .eq("teacher_id", teacherId);
 
   if (error) {
-    throw new Error(`Failed to fetch teacher assignment: ${error.message}`);
+    throw new Error(`Failed to fetch teacher assignments: ${error.message}`);
   }
 
-  return data || null;
+  return data || [];
 };
 
 const parseBooleanQuery = (value, defaultValue = false) => {
@@ -357,26 +356,29 @@ router.get("/", adminOrTeacher, async (req, res) => {
 
     const includeInactive = parseBooleanQuery(include_inactive, false);
     const academicYear = normalizeAcademicYear(academicYearRaw);
+    let teacherAssignments = [];
     let teacherAssignment = null;
 
     if (req.user?.role === "teacher") {
-      teacherAssignment = await getTeacherAssignment(req.user.id);
-      if (!teacherAssignment) {
+      teacherAssignments = await getTeacherAssignments(req.user.id);
+      if (!teacherAssignments.length) {
         return res.status(403).json({
           success: false,
           message: "Teacher is not assigned to any class/section.",
         });
       }
 
-      const requestedClass = cls ? String(cls).trim() : teacherAssignment.class;
-      const requestedSection = section ? String(section).trim() : teacherAssignment.section;
-      const requestedYear = academicYear || teacherAssignment.academic_year;
+      const requestedClass = cls ? String(cls).trim() : "";
+      const requestedSection = section ? String(section).trim() : "";
+      const requestedYear = academicYear || "";
+      teacherAssignment = teacherAssignments.find((assignment) => {
+        const classMatches = requestedClass ? requestedClass === assignment.class : true;
+        const sectionMatches = requestedSection ? requestedSection === assignment.section : true;
+        const yearMatches = requestedYear ? requestedYear === assignment.academic_year : true;
+        return classMatches && sectionMatches && yearMatches;
+      }) || null;
 
-      if (
-        requestedClass !== teacherAssignment.class ||
-        requestedSection !== teacherAssignment.section ||
-        requestedYear !== teacherAssignment.academic_year
-      ) {
+      if (!teacherAssignment) {
         return res.status(403).json({
           success: false,
           message: "Teacher can access only assigned class/section.",

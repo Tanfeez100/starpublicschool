@@ -63,7 +63,8 @@ Run this SQL in Supabase SQL Editor.
 create extension if not exists pgcrypto;
 
 create table if not exists public.teacher_assignments (
-  teacher_id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
+  teacher_id uuid not null references auth.users(id) on delete cascade,
   class text not null,
   section text not null,
   academic_year text not null,
@@ -263,7 +264,7 @@ Body:
 ```
 
 Rules:
-- One teacher can have one active assignment.
+- One teacher can have multiple active assignments.
 - One class/section/year can be assigned to one teacher.
 
 ### Remove Teacher Assignment
@@ -494,7 +495,7 @@ Tables:
   - Admin-created school holiday dates.
 
 Key constraints:
-- `teacher_assignments.teacher_id` is unique.
+- `teacher_assignments.teacher_id` can appear multiple times for multi-class attendance access.
 - `teacher_assignments(class, section, academic_year)` is unique.
 - `attendance_records(student_id, attendance_date)` is unique.
 

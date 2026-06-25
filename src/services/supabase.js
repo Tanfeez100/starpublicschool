@@ -40,6 +40,28 @@ export const supabase = createClient(
   }
 );
 
+export const supabaseAuth = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+    global: {
+      fetch: (url, options = {}) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        return fetch(url, {
+          ...options,
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeout));
+      },
+    },
+  }
+);
+
 /**
  * User Role Cache - reduces database queries
  * Structure: { userId: { role, timestamp } }
@@ -72,7 +94,7 @@ export const getRoleCached = async (userId) => {
  */
 export const verifyToken = async (token, retryFn) => {
   try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
     
     if (error || !user) {
       return { valid: false, error: error?.message || "User not found" };

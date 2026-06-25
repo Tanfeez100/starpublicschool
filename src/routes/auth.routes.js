@@ -1,5 +1,5 @@
 import express from "express";
-import { supabase, getRoleCached } from "../services/supabase.js";
+import { supabase, supabaseAuth, getRoleCached } from "../services/supabase.js";
 import { createClient } from "@supabase/supabase-js";
 import { adminOnly } from "../middleware/auth.middleware.js";
 
@@ -85,14 +85,21 @@ const getTeacherAssignmentMap = async (teacherIds = []) => {
   const { data, error } = await supabase
     .from("teacher_assignments")
     .select("teacher_id, class, section, academic_year, created_at, updated_at")
-    .in("teacher_id", teacherIds);
+    .in("teacher_id", teacherIds)
+    .order("class", { ascending: true })
+    .order("section", { ascending: true });
 
   if (error) {
     console.warn("Teacher assignment fetch skipped:", error.message);
     return new Map();
   }
 
-  return new Map((data || []).map((row) => [row.teacher_id, row]));
+  return (data || []).reduce((map, row) => {
+    const rows = map.get(row.teacher_id) || [];
+    rows.push(row);
+    map.set(row.teacher_id, rows);
+    return map;
+  }, new Map());
 };
 
 const ensureTeacherRole = async (teacherId) => {
@@ -255,7 +262,7 @@ router.post("/login", async (req, res) => {
 
     // ⚡ OPTIMIZATION: Add retry logic for network resilience
     const { data, error } = await retryWithBackoff(() => 
-      supabase.auth.signInWithPassword({ email, password })
+      supabaseAuth.auth.signInWithPassword({ email, password })
     );
 
     if (error)
@@ -278,10 +285,11 @@ router.post("/login", async (req, res) => {
     // 4️⃣ SUCCESS
     // Calculate token expiration (30 minutes from now)
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-    const assignment =
+    const assignments =
       role === "teacher"
-        ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || null
-        : null;
+        ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
+        : [];
+    const assignment = assignments[0] || null;
     
     res.json({
       message: "Login successful",
@@ -292,6 +300,7 @@ router.post("/login", async (req, res) => {
         assignedClass: assignment?.class || null,
         assignedSection: assignment?.section || null,
         academicYear: assignment?.academic_year || null,
+        assignments,
       },
       session: data.session,
       token_info: {
@@ -398,10 +407,12 @@ router.get("/teachers", adminOnly, async (req, res) => {
     }));
     const assignmentByTeacherId = await getTeacherAssignmentMap(teacherIds);
     const teachersWithAssignments = teachers.map((teacher) => {
-      const assignment = assignmentByTeacherId.get(teacher.id) || null;
+      const assignments = assignmentByTeacherId.get(teacher.id) || [];
+      const assignment = assignments[0] || null;
       return {
         ...teacher,
         assignment,
+        assignments,
         assignedClass: assignment?.class || null,
         assignedSection: assignment?.section || null,
         academicYear: assignment?.academic_year || null,
@@ -468,9 +479,12 @@ const saveTeacherAssignment = async (req, res) => {
 
     const { data: existingAssignment, error: existingError } = await supabase
       .from("teacher_assignments")
-      .select("teacher_id")
+      .select("teacher_id, class, section, academic_year")
       .eq("teacher_id", teacherId)
-      .maybeSingle();
+      .eq("class", assignedClass)
+      .eq("section", assignedSection)
+      .eq("academic_year", academicYear)
+      .limit(1);
 
     if (existingError) {
       return res.status(500).json({
@@ -479,11 +493,15 @@ const saveTeacherAssignment = async (req, res) => {
       });
     }
 
-    const assignmentQuery = existingAssignment
+    const hasExistingAssignment = Array.isArray(existingAssignment) && existingAssignment.length > 0;
+    const assignmentQuery = hasExistingAssignment
       ? supabase
           .from("teacher_assignments")
           .update(assignmentPayload)
           .eq("teacher_id", teacherId)
+          .eq("class", assignedClass)
+          .eq("section", assignedSection)
+          .eq("academic_year", academicYear)
           .select("teacher_id, class, section, academic_year, created_at, updated_at")
           .single()
       : supabase
@@ -515,9 +533,7 @@ const saveTeacherAssignment = async (req, res) => {
 
     return res.json({
       success: true,
-      message: existingAssignment
-        ? "Teacher assignment updated successfully"
-        : "Teacher assigned successfully",
+      message: hasExistingAssignment ? "Teacher assignment already saved" : "Teacher assigned successfully",
       assignment,
     });
   } catch (err) {
@@ -536,11 +552,22 @@ router.delete("/teachers/:id/assignment", adminOnly, async (req, res) => {
   try {
     const teacherId = req.params.id;
     await ensureTeacherRole(teacherId);
+    const assignedClass = sanitizeString(req.query?.class || req.query?.assignedClass);
+    const assignedSection = sanitizeString(req.query?.section || req.query?.assignedSection);
+    const academicYear = req.query?.academic_year || req.query?.academicYear
+      ? normalizeAcademicYear(req.query?.academic_year || req.query?.academicYear)
+      : "";
 
-    const { error } = await supabase
+    let query = supabase
       .from("teacher_assignments")
       .delete()
       .eq("teacher_id", teacherId);
+
+    if (assignedClass) query = query.eq("class", assignedClass);
+    if (assignedSection) query = query.eq("section", assignedSection);
+    if (academicYear) query = query.eq("academic_year", academicYear);
+
+    const { error } = await query;
 
     if (error) {
       return res.status(500).json({
@@ -793,7 +820,7 @@ router.post("/logout", async (req, res) => {
     const token = authHeader.split(" ")[1];
 
     // ⚡ OPTIMIZATION: Verify token with proper Supabase auth
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
 
     if (error || !user) {
       // Token already invalid/expired, but still return success
@@ -854,7 +881,7 @@ router.post("/refresh", async (req, res) => {
       const accessToken = authHeader.split(" ")[1];
       
       // Get user session to extract refresh token
-      const { data: { user }, error: userError } = await supabase.auth.getUser(accessToken);
+      const { data: { user }, error: userError } = await supabaseAuth.auth.getUser(accessToken);
       
       if (userError || !user) {
         return res.status(401).json({ 
@@ -876,7 +903,7 @@ router.post("/refresh", async (req, res) => {
     }
 
     // Refresh the session
-    const { data, error } = await supabase.auth.refreshSession({
+    const { data, error } = await supabaseAuth.auth.refreshSession({
       refresh_token: token,
     });
 
@@ -902,10 +929,11 @@ router.post("/refresh", async (req, res) => {
         message: "Role not assigned" 
       });
     }
-    const assignment =
+    const assignments =
       roleData.role === "teacher"
-        ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || null
-        : null;
+        ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
+        : [];
+    const assignment = assignments[0] || null;
 
     res.json({
       success: true,
@@ -917,6 +945,7 @@ router.post("/refresh", async (req, res) => {
         assignedClass: assignment?.class || null,
         assignedSection: assignment?.section || null,
         academicYear: assignment?.academic_year || null,
+        assignments,
       },
       session: data.session,
       token_info: {

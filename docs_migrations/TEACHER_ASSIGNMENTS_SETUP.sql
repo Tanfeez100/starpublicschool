@@ -2,7 +2,8 @@
 -- Run this in Supabase SQL Editor before using the teacher assignment UI.
 
 create table if not exists public.teacher_assignments (
-  teacher_id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
+  teacher_id uuid not null references auth.users(id) on delete cascade,
   class text not null,
   section text not null,
   academic_year text not null,
@@ -14,8 +15,46 @@ create table if not exists public.teacher_assignments (
     unique (class, section, academic_year)
 );
 
+alter table public.teacher_assignments
+  add column if not exists id uuid default gen_random_uuid();
+
+update public.teacher_assignments
+set id = gen_random_uuid()
+where id is null;
+
+alter table public.teacher_assignments
+  alter column id set not null;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.table_constraints
+    where table_schema = 'public'
+      and table_name = 'teacher_assignments'
+      and constraint_name = 'teacher_assignments_pkey'
+  ) then
+    alter table public.teacher_assignments
+      drop constraint teacher_assignments_pkey;
+  end if;
+
+  if not exists (
+    select 1
+    from information_schema.table_constraints
+    where table_schema = 'public'
+      and table_name = 'teacher_assignments'
+      and constraint_name = 'teacher_assignments_pkey'
+  ) then
+    alter table public.teacher_assignments
+      add constraint teacher_assignments_pkey primary key (id);
+  end if;
+end $$;
+
 create index if not exists idx_teacher_assignments_class_section
   on public.teacher_assignments (class, section);
+
+create index if not exists idx_teacher_assignments_teacher_id
+  on public.teacher_assignments (teacher_id);
 
 create or replace function public.set_teacher_assignments_updated_at()
 returns trigger
