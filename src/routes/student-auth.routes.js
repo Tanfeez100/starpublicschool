@@ -1,7 +1,7 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { supabase } from "../services/supabase.js";
+import { supabase, getAppJwtSecret } from "../services/supabase.js";
 
 const router = express.Router();
 
@@ -104,7 +104,7 @@ router.post("/login", async (req, res) => {
       .eq("student_id", authRow.student_id);
 
     const user = studentPayload(student);
-    const jwtSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
+    const jwtSecret = getAppJwtSecret();
     if (!jwtSecret) {
       return res.status(500).json({ success: false, message: "Student login is not configured." });
     }

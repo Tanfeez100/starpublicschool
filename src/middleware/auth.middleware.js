@@ -1,4 +1,4 @@
-import { supabase, verifyToken, getRoleCached } from "../services/supabase.js";
+import { supabase, verifyToken, getRoleCached, getAppJwtSecret } from "../services/supabase.js";
 import jwt from "jsonwebtoken";
 
 /**
@@ -36,20 +36,24 @@ export const authenticate = async (req, res, next) => {
     }
 
     const token = authHeader.split(" ")[1];
-    const jwtSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
+    const jwtSecret = getAppJwtSecret();
 
     if (jwtSecret) {
       try {
         const decoded = jwt.verify(token, jwtSecret);
-        if (decoded?.role === "student") {
+        if (["student", "admin", "teacher"].includes(decoded?.role)) {
           req.user = {
             id: decoded.id || decoded.sub,
             email: decoded.email || null,
-            role: "student",
+            role: decoded.role,
             class: decoded.class || null,
             section: decoded.section || null,
             name: decoded.name || null,
             rollNo: decoded.rollNo || decoded.roll_no || null,
+            assignedClass: decoded.assignedClass || null,
+            assignedSection: decoded.assignedSection || null,
+            academicYear: decoded.academicYear || null,
+            assignments: Array.isArray(decoded.assignments) ? decoded.assignments : [],
           };
           return next();
         }
