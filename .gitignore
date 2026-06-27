@@ -43,3 +43,4 @@ postman_collections/
 postman_collections/*.json
 
 migrations/*.sql
+ docs_migrations/TEACHER_GPS_ATTENDANCE_MODULE.sql

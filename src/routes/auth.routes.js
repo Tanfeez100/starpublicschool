@@ -1,7 +1,8 @@
 import express from "express";
-import { supabase, supabaseAuth, getRoleCached } from "../services/supabase.js";
+import { supabase, supabaseAuth, getRoleCached, getAppJwtSecret } from "../services/supabase.js";
 import { createClient } from "@supabase/supabase-js";
 import { adminOnly } from "../middleware/auth.middleware.js";
+import jwt from "jsonwebtoken";
 
 /**
  * OPTIMIZATION: Retry logic for network failures
@@ -47,6 +48,28 @@ const supabaseAdmin = createClient(
   }
 );
 
+const APP_SESSION_TTL_SECONDS = 24 * 60 * 60;
+const buildAppAccessToken = (user = {}, assignments = []) => {
+  const jwtSecret = getAppJwtSecret();
+  if (!jwtSecret) {
+    throw new Error("JWT secret not configured for app session signing.");
+  }
+
+  return jwt.sign(
+    {
+      id: user.id,
+      email: user.email || null,
+      role: user.role || null,
+      assignedClass: user.assignedClass || null,
+      assignedSection: user.assignedSection || null,
+      academicYear: user.academicYear || null,
+      assignments,
+    },
+    jwtSecret,
+    { expiresIn: APP_SESSION_TTL_SECONDS }
+  );
+};
+
 const router = express.Router();
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -63,6 +86,23 @@ const createHttpError = (status, message, detail = null) => {
 const normalizeRole = (role) => String(role || "").trim().toLowerCase();
 const sanitizeString = (value) => (typeof value === "string" ? value.trim() : value);
 const isValidUuid = (value) => UUID_REGEX.test(String(value || ""));
+const isSchemaMissing = (error) => {
+  const text = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
+  return text.includes("schema cache") || text.includes("pgrst205") || text.includes("could not find the table") || text.includes("relation");
+};
+
+const generateTemporaryPassword = () =>
+  `Sps@${Math.random().toString(36).slice(2, 8)}${Math.floor(100 + Math.random() * 900)}`;
+
+const generateUsername = ({ fullName = "", employeeId = "", email = "" } = {}) => {
+  const source = employeeId || fullName || email.split("@")[0] || "teacher";
+  const slug = String(source)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 24);
+  return `${slug || "teacher"}.${Math.floor(1000 + Math.random() * 9000)}`;
+};
 
 const getDefaultAcademicYear = () => {
   const now = new Date();
@@ -100,6 +140,111 @@ const getTeacherAssignmentMap = async (teacherIds = []) => {
     map.set(row.teacher_id, rows);
     return map;
   }, new Map());
+};
+
+const getTeacherProfileMap = async (teacherIds = []) => {
+  if (!teacherIds.length) return new Map();
+
+  const { data, error } = await supabase
+    .from("teacher_profiles")
+    .select("*")
+    .in("id", teacherIds);
+
+  if (error) {
+    if (isSchemaMissing(error)) {
+      console.warn("teacher_profiles table not visible yet:", error.message);
+      return new Map();
+    }
+    throw error;
+  }
+
+  return (data || []).reduce((map, row) => {
+    map.set(row.id, row);
+    return map;
+  }, new Map());
+};
+
+const resolveTeacherEmailForLogin = async (identity) => {
+  const normalized = sanitizeString(identity);
+  if (!normalized || normalized.includes("@")) return normalized;
+
+  const { data, error } = await supabase
+    .from("teacher_profiles")
+    .select("email, status")
+    .eq("username", normalized)
+    .maybeSingle();
+
+  if (error) {
+    if (isSchemaMissing(error)) return normalized;
+    throw error;
+  }
+
+  if (data?.status === "inactive") {
+    throw createHttpError(403, "Inactive teachers cannot login.");
+  }
+
+  return data?.email || normalized;
+};
+
+const ensureTeacherProfileCanLogin = async (teacherId) => {
+  const { data, error } = await supabase
+    .from("teacher_profiles")
+    .select("status")
+    .eq("id", teacherId)
+    .maybeSingle();
+
+  if (error) {
+    if (isSchemaMissing(error)) return;
+    throw error;
+  }
+
+  if (data?.status === "inactive") {
+    throw createHttpError(403, "Inactive teachers cannot login.");
+  }
+};
+
+const upsertTeacherProfile = async ({ teacherId, payload = {}, email, actorId }) => {
+  const fullName = sanitizeString(payload.full_name || payload.fullName || payload.name) || "";
+  const employeeId = sanitizeString(payload.employee_id || payload.employeeId) || null;
+  const username = sanitizeString(payload.username) || generateUsername({ fullName, employeeId, email });
+  const profile = {
+    id: teacherId,
+    employee_id: employeeId,
+    full_name: fullName || email,
+    mobile: sanitizeString(payload.mobile) || null,
+    email,
+    gender: sanitizeString(payload.gender) || null,
+    date_of_birth: sanitizeString(payload.date_of_birth || payload.dateOfBirth) || null,
+    qualification: sanitizeString(payload.qualification) || null,
+    designation: sanitizeString(payload.designation) || null,
+    department: sanitizeString(payload.department) || null,
+    joining_date: sanitizeString(payload.joining_date || payload.joiningDate) || null,
+    address: sanitizeString(payload.address) || null,
+    emergency_contact: sanitizeString(payload.emergency_contact || payload.emergencyContact) || null,
+    photo_url: sanitizeString(payload.photo_url || payload.photoUrl) || null,
+    status: sanitizeString(payload.status) || "active",
+    username,
+    must_reset_password: true,
+    created_by: actorId || null,
+    updated_by: actorId || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from("teacher_profiles")
+    .upsert([profile], { onConflict: "id" })
+    .select("*")
+    .single();
+
+  if (error) {
+    if (isSchemaMissing(error)) {
+      console.warn("teacher profile save skipped:", error.message);
+      return null;
+    }
+    throw error;
+  }
+
+  return data;
 };
 
 const ensureTeacherRole = async (teacherId) => {
@@ -255,14 +400,17 @@ const deleteManagedUser = async ({ userId, requiredRole = null, actorUserId = nu
 
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, username, password } = req.body;
+    const identity = email || username;
 
-    if (!email || !password)
+    if (!identity || !password)
       return res.status(400).json({ message: "Email & password required" });
+
+    const resolvedEmail = await resolveTeacherEmailForLogin(identity);
 
     // ⚡ OPTIMIZATION: Add retry logic for network resilience
     const { data, error } = await retryWithBackoff(() => 
-      supabaseAuth.auth.signInWithPassword({ email, password })
+      supabaseAuth.auth.signInWithPassword({ email: resolvedEmail, password })
     );
 
     if (error)
@@ -283,16 +431,38 @@ router.post("/login", async (req, res) => {
     }
 
     // 4️⃣ SUCCESS
-    // Calculate token expiration (30 minutes from now)
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    // Calculate token expiration (24 hours from now)
+    if (role === "teacher") {
+      await ensureTeacherProfileCanLogin(data.user.id);
+    }
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const assignments =
       role === "teacher"
         ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
         : [];
     const assignment = assignments[0] || null;
+    const appAccessToken = buildAppAccessToken(
+      {
+        id: data.user.id,
+        email: data.user.email,
+        role,
+        assignedClass: assignment?.class || null,
+        assignedSection: assignment?.section || null,
+        academicYear: assignment?.academic_year || null,
+      },
+      assignments
+    );
+    const appSession = {
+      ...(data.session || {}),
+      access_token: appAccessToken,
+      refresh_token: data.session?.refresh_token || "",
+    };
     
     res.json({
       message: "Login successful",
+      access_token: appAccessToken,
+      refresh_token: appSession.refresh_token,
       user: {
         id: data.user.id,
         email: data.user.email,
@@ -302,18 +472,18 @@ router.post("/login", async (req, res) => {
         academicYear: assignment?.academic_year || null,
         assignments,
       },
-      session: data.session,
+      session: appSession,
       token_info: {
         expires_at: expiresAt.toISOString(),
-        expires_in: 1800, // 30 minutes in seconds
-        note: "Token expires after 30 minutes of inactivity. Use /api/auth/refresh to extend session.",
+        expires_in: 86400, // 24 hours in seconds
+        note: "Token expires after 24 hours of inactivity. Use /api/auth/refresh to extend session.",
       },
     });
 
   } catch (err) {
     console.error("Login error:", err);
-    res.status(503).json({ 
-      message: "Service temporarily unavailable. Please try again.",
+    res.status(err.status || 503).json({ 
+      message: err.message || "Service temporarily unavailable. Please try again.",
       error: err.message 
     });
   }
@@ -346,17 +516,29 @@ router.post("/create-user", adminOnly, async (req, res) => {
    ====================================================== */
 router.post("/teachers", adminOnly, async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email } = req.body;
+    const password = req.body.password || generateTemporaryPassword();
     const createdTeacher = await createManagedUser({
       email,
       password,
       role: "teacher",
     });
+    const profile = await upsertTeacherProfile({
+      teacherId: createdTeacher.id,
+      payload: req.body,
+      email,
+      actorId: req.user?.id || null,
+    });
 
     return res.status(201).json({
       success: true,
       message: "Teacher created successfully",
-      teacher: createdTeacher,
+      teacher: {
+        ...createdTeacher,
+        profile,
+        username: profile?.username || null,
+        temporaryPassword: password,
+      },
     });
   } catch (err) {
     console.error("Create teacher error:", err);
@@ -406,11 +588,19 @@ router.get("/teachers", adminOnly, async (req, res) => {
       email: emailById.get(row.user_id) || null,
     }));
     const assignmentByTeacherId = await getTeacherAssignmentMap(teacherIds);
+    const profileByTeacherId = await getTeacherProfileMap(teacherIds);
     const teachersWithAssignments = teachers.map((teacher) => {
       const assignments = assignmentByTeacherId.get(teacher.id) || [];
       const assignment = assignments[0] || null;
+      const profile = profileByTeacherId.get(teacher.id) || null;
       return {
         ...teacher,
+        profile,
+        employeeId: profile?.employee_id || "",
+        fullName: profile?.full_name || "",
+        mobile: profile?.mobile || "",
+        username: profile?.username || "",
+        status: profile?.status || "active",
         assignment,
         assignments,
         assignedClass: assignment?.class || null,
@@ -914,8 +1104,8 @@ router.post("/refresh", async (req, res) => {
       });
     }
 
-    // Calculate token expiration (30 minutes from now)
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    // Calculate token expiration (24 hours from now)
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     // Get user role
     const { data: roleData, error: roleError } = await supabase
@@ -934,10 +1124,28 @@ router.post("/refresh", async (req, res) => {
         ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
         : [];
     const assignment = assignments[0] || null;
+    const appAccessToken = buildAppAccessToken(
+      {
+        id: data.user.id,
+        email: data.user.email,
+        role: roleData.role,
+        assignedClass: assignment?.class || null,
+        assignedSection: assignment?.section || null,
+        academicYear: assignment?.academic_year || null,
+      },
+      assignments
+    );
+    const appSession = {
+      ...(data.session || {}),
+      access_token: appAccessToken,
+      refresh_token: data.session?.refresh_token || "",
+    };
 
     res.json({
       success: true,
       message: "Token refreshed successfully",
+      access_token: appAccessToken,
+      refresh_token: appSession.refresh_token,
       user: {
         id: data.user.id,
         email: data.user.email,
@@ -947,10 +1155,10 @@ router.post("/refresh", async (req, res) => {
         academicYear: assignment?.academic_year || null,
         assignments,
       },
-      session: data.session,
+      session: appSession,
       token_info: {
         expires_at: expiresAt.toISOString(),
-        expires_in: 1800,
+        expires_in: 86400,
       },
     });
 

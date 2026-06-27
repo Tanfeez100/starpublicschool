@@ -14,6 +14,7 @@ import promotionRoutes from "./routes/promotion.routes.js";
 import migrationRoutes from "./routes/migration.routes.js";
 import publicFeesRoutes from "./routes/publicFees.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
+import teacherAttendanceRoutes from "./routes/teacher-attendance.routes.js";
 import studentAuthRoutes from "./routes/student-auth.routes.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
@@ -48,6 +49,7 @@ app.use("/api/public-fees", publicFeesRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/migration", migrationRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 
 // MEGA Image Storage Routes
 app.use("/api/mega", megaRoutes);

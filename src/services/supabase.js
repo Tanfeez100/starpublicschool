@@ -105,3 +105,18 @@ export const verifyToken = async (token, retryFn) => {
     return { valid: false, error: err.message };
   }
 };
+
+const trimSecret = (value) => {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().replace(/^['"]|['"]$/g, "");
+  if (!normalized) return "";
+  return normalized.startsWith("yeyJ") ? normalized.slice(1) : normalized;
+};
+
+export const getAppJwtSecret = () =>
+  trimSecret(
+    process.env.JWT_SECRET ||
+    process.env.SUPABASE_JWT_SECRET ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
