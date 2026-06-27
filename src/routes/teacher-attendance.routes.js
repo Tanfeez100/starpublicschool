@@ -7,7 +7,7 @@ const router = express.Router();
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const CHECKOUT_REASONS = new Set([
   "Forgot Checkout",
-  "GPS Problem",
+  "Location Problem",
   "Network Issue",
   "Emergency",
   "Other",
@@ -46,7 +46,7 @@ const toHumanErrorMessage = (errorOrMessage, fallback = "Request failed") => {
   }
 
   if (text.includes("schema cache") || text.includes("pgrst205") || text.includes("could not find the table") || text.includes("relation")) {
-    return "Teacher GPS attendance tables Supabase me visible nahi hain. TEACHER_GPS_ATTENDANCE_MODULE.sql run karke schema reload karein.";
+    return "Teacher attendance tables Supabase me visible nahi hain. Schema reload karke dobara try karein.";
   }
 
   if (text.includes("duplicate key") || text.includes("23505")) {
@@ -140,7 +140,7 @@ const getActiveSettings = async () => {
 
 const validateCampusLocation = (settings, location = {}) => {
   if (!settings?.latitude || !settings?.longitude) {
-    const err = new Error("School GPS settings configure nahi hai.");
+    const err = new Error("School location settings configure nahi hai.");
     err.status = 400;
     throw err;
   }
@@ -154,7 +154,7 @@ const validateCampusLocation = (settings, location = {}) => {
   );
 
   if (accuracy !== null && accuracy > settings.gps_accuracy_meters) {
-    const err = new Error(`GPS accuracy weak hai (${Math.round(accuracy)}m). ${settings.gps_accuracy_meters}m ke andar accurate location required hai.`);
+    const err = new Error(`Location accuracy weak hai (${Math.round(accuracy)}m). ${settings.gps_accuracy_meters}m ke andar accurate location required hai.`);
     err.status = 400;
     err.detail = { accuracy, allowedAccuracy: settings.gps_accuracy_meters };
     throw err;
@@ -443,7 +443,7 @@ router.put("/settings", authorize("admin"), async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json({ success: true, message: "Teacher GPS attendance settings saved.", settings: normalizeSettings(data) });
+    res.json({ success: true, message: "Teacher attendance settings saved.", settings: normalizeSettings(data) });
   } catch (err) {
     console.error("Save teacher attendance settings error:", err);
     sendError(res, err.status || 500, toHumanErrorMessage(err, "Failed to save teacher attendance settings"), err.detail ? { detail: err.detail } : {});
