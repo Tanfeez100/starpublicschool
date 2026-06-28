@@ -158,6 +158,17 @@ begin
 end;
 $$;
 
+create or replace function public.set_holiday_calendar_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.holiday_date = coalesce(new.holiday_date, new.start_date);
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 drop trigger if exists trg_teacher_assignments_updated_at on public.teacher_assignments;
 create trigger trg_teacher_assignments_updated_at
 before update on public.teacher_assignments
@@ -176,7 +187,7 @@ for each row execute function public.set_updated_at();
 drop trigger if exists trg_holiday_calendar_updated_at on public.holiday_calendar;
 create trigger trg_holiday_calendar_updated_at
 before update on public.holiday_calendar
-for each row execute function public.set_updated_at();
+for each row execute function public.set_holiday_calendar_updated_at();
 
 alter table public.teacher_assignments enable row level security;
 alter table public.student_auth enable row level security;

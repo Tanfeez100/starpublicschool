@@ -876,7 +876,7 @@ router.get("/students/:studentId", async (req, res) => {
 
     const { data: student, error: studentError } = await supabase
       .from("students")
-      .select("id, name, class, section, roll_no, academic_year, status")
+      .select("*")
       .eq("id", studentId)
       .maybeSingle();
 

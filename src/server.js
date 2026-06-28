@@ -16,6 +16,9 @@ import publicFeesRoutes from "./routes/publicFees.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import teacherAttendanceRoutes from "./routes/teacher-attendance.routes.js";
 import studentAuthRoutes from "./routes/student-auth.routes.js";
+import studentLeaveRoutes from "./routes/student-leaves.routes.js";
+import studentNotificationsRoutes from "./routes/student-notifications.routes.js";
+import studentFeesRoutes from "./routes/student-fees.routes.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
 console.log(
@@ -34,6 +37,8 @@ app.get("/api/health", (req, res) => {
 // Register all routes
 app.use("/api/auth", authRoutes);
 app.use("/api/student-auth", studentAuthRoutes);
+app.use("/api/student-notifications", studentNotificationsRoutes);
+app.use("/api/student-fees", studentFeesRoutes);
 app.use("/api/students", studentsRoutes);
 app.use("/api/marks", marksRoutes);
 app.use("/api/result", resultRoutes);
@@ -50,6 +55,7 @@ app.use("/api/promotions", promotionRoutes);
 app.use("/api/migration", migrationRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);
+app.use("/api/student-leaves", studentLeaveRoutes);
 
 // MEGA Image Storage Routes
 app.use("/api/mega", megaRoutes);

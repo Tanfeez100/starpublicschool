@@ -3,6 +3,11 @@ import { supabase } from "../services/supabase.js";
 import { generateInvoicePDF } from "../services/pdfGenerator.js";
 import { sendReceiptOnWhatsApp } from "../services/whatsappService.js";
 import { sendFeePaymentSms } from "../services/twilioSmsService.js";
+import {
+  fetchBillPaymentsByBillIds,
+  loadBillNotificationContext,
+  sendStudentPushNotification,
+} from "../services/studentNotificationService.js";
 
 const toSafeString = (value) => String(value ?? "").trim();
 const toAmount = (value) => Number.parseFloat(value || 0) || 0;
@@ -222,13 +227,11 @@ const buildInvoiceData = async (billId) => {
 };
 
 const enrichBill = async (bill) => {
-  const [{ data: items }, { data: payments }] = await Promise.all([
+  const [{ data: items }] = await Promise.all([
     supabase.from("fee_bill_items").select("fee_name, amount").eq("bill_id", bill.id),
-    supabase
-      .from("fee_payments")
-      .select("amount_paid, payment_mode, payment_date, transaction_id, receipt_no")
-      .eq("bill_id", bill.id),
   ]);
+
+  const payments = await fetchBillPaymentsByBillIds([bill.id]);
 
   const totalPaid =
     payments?.reduce((sum, payment) => sum + toAmount(payment.amount_paid), 0) || 0;
@@ -420,6 +423,35 @@ const completeCapturedPublicPayment = async ({
     };
   }
 
+  let push = { sent: false, skipped: true };
+  if (createdPayment) {
+    try {
+      const latestBillContext = await loadBillNotificationContext(billId);
+      const paymentAmount = toAmount(cashfreePayment.payment_amount || order.order_amount);
+      push = await sendStudentPushNotification({
+        studentId: latestBillContext.student?.id,
+        title: `Fee payment recorded for ${latestBillContext.month}`,
+        body: `${latestBillContext.student?.name || "Student"} | Paid Rs. ${paymentAmount.toFixed(2)} via ONLINE | Remaining Rs. ${latestBillContext.summary.remaining.toFixed(2)}`,
+        notificationType: "fee_payment",
+        sourceType: "fee_payments",
+        sourceId: billId,
+        data: {
+          ...latestBillContext,
+          payment: {
+            amount_paid: paymentAmount,
+            payment_mode: "online",
+            payment_date: new Date().toISOString().slice(0, 10),
+            transaction_id: transactionId,
+            receipt_url: receiptUrl,
+          },
+        },
+      });
+    } catch (pushError) {
+      console.error("Student push payment notification failed:", pushError);
+      push = { sent: false, error: pushError.message };
+    }
+  }
+
   return {
     status: "paid",
     message: "Payment verified and recorded successfully",
@@ -429,6 +461,7 @@ const completeCapturedPublicPayment = async ({
     cashfree_payment_id: transactionId,
     bill_id: billId,
     receipt_url: receiptUrl,
+    push,
     whatsapp,
     sms,
   };

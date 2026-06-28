@@ -174,6 +174,116 @@ const buildSubjectKey = (row, subjectMeta) => {
 const isPublishedSummary = (status) =>
   String(status || "").trim().toUpperCase() === "PUBLISHED";
 
+export const getResultAvailability = async (req, res) => {
+  try {
+    const className = toSafeString(req.query.class);
+    const rollInput = toSafeString(req.query.roll);
+    const section = toSafeString(req.query.section) || null;
+    const academicYearRaw = toSafeString(
+      req.query.academic_year || req.query.session || req.query.academic_session
+    );
+    const academicYears = buildAcademicYearCandidates(academicYearRaw);
+
+    if (!className || !rollInput || !academicYearRaw) {
+      return res.status(400).json({
+        message: "class, roll, and academic_year are required",
+      });
+    }
+
+    if (!academicYears.length) {
+      return res.status(400).json({
+        message: "academic_year must be in format YYYY-YY or YYYY-YYYY",
+      });
+    }
+
+    if (!/^\d+$/.test(rollInput) || Number(rollInput) <= 0) {
+      return res.status(400).json({
+        message: "roll must be a positive numeric value",
+      });
+    }
+
+    const students = await fetchStudentByClassRoll({
+      className,
+      rollNoInput: rollInput,
+      section,
+      academicYears,
+    });
+
+    if (!students.length) {
+      return res.status(404).json({
+        message: "Student not found",
+      });
+    }
+
+    const student = students[0];
+    const { data: summaries, error: summaryError } = await supabase
+      .from("result_summary")
+      .select("terminal, status, calculated_at")
+      .eq("student_id", student.id)
+      .in("terminal", ["First", "Second", "Third", "Annual"])
+      .order("calculated_at", { ascending: false });
+
+    if (summaryError) {
+      return res.status(500).json({
+        message: "Failed to fetch result availability",
+        error: summaryError.message,
+      });
+    }
+
+    const summaryMap = new Map();
+    (summaries || []).forEach((row) => {
+      const label = TERM_DB_LABEL[normalizeInputTerm(row?.terminal) || ""] || toSafeString(row?.terminal);
+      if (!label) return;
+
+      const existing = summaryMap.get(label);
+      const currentTime = rowTimestamp(row);
+      if (!existing || currentTime >= rowTimestamp(existing)) {
+        summaryMap.set(label, row);
+      }
+    });
+
+    const publishedFor = (label) => {
+      const row = summaryMap.get(label);
+      return Boolean(row && isPublishedSummary(row.status));
+    };
+
+    const publishedDateFor = (label) => {
+      const row = summaryMap.get(label);
+      return row?.calculated_at ? new Date(row.calculated_at).toISOString().split("T")[0] : null;
+    };
+
+    const terminals = [
+      { terminal: "First", published: publishedFor("First"), published_date: publishedDateFor("First") },
+      { terminal: "Second", published: publishedFor("Second"), published_date: publishedDateFor("Second") },
+      { terminal: "Third", published: publishedFor("Third"), published_date: publishedDateFor("Third") },
+      {
+        terminal: "Annual",
+        published: publishedFor("Third"),
+        published_date: publishedDateFor("Third"),
+        resolved_terminal: "Third",
+      },
+    ];
+
+    return res.json({
+      studentDetails: {
+        id: student.id,
+        name: student.name,
+        class: student.class,
+        section: student.section || null,
+        rollNumber: student.roll_no,
+        academicYear: student.academic_year || null,
+      },
+      terminals,
+    });
+  } catch (error) {
+    console.error("Get result availability error:", error);
+    return res.status(500).json({
+      message: "Internal server error",
+      error: error.message,
+    });
+  }
+};
+
 const dedupeRowsByTermAndSubject = (rows, subjectMap) => {
   const map = new Map();
 

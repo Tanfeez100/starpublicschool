@@ -30,6 +30,8 @@ create table if not exists public.students (
   transport_charge numeric(10,2),
   aadhaar_card varchar(12),
   pen_number varchar(32),
+  username text,
+  date_of_birth date,
   admission_number text,
   admission_date date,
   photo_url text,
@@ -51,6 +53,9 @@ create index if not exists idx_students_roll_no on public.students (roll_no);
 create index if not exists idx_students_admission_date on public.students (admission_date);
 create index if not exists idx_students_aadhaar on public.students (aadhaar_card);
 create index if not exists idx_students_pen_number on public.students (pen_number);
+create unique index if not exists idx_students_username_unique
+  on public.students (username)
+  where username is not null and username <> '';
 create unique index if not exists idx_students_admission_number_unique
   on public.students (admission_number)
   where admission_number is not null and admission_number <> '';
@@ -492,6 +497,8 @@ CREATE TABLE IF NOT EXISTS fee_payments (
   amount_paid DECIMAL(10, 2) NOT NULL DEFAULT 0,
   payment_mode VARCHAR(50) NOT NULL, -- cash/cheque/online/bank_transfer
   payment_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  transaction_id TEXT,
+  receipt_no TEXT,
   created_at TIMESTAMP DEFAULT now(),
   
   FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
@@ -503,6 +510,9 @@ CREATE INDEX IF NOT EXISTS idx_fee_payments_student ON fee_payments(student_id);
 CREATE INDEX IF NOT EXISTS idx_fee_payments_bill ON fee_payments(bill_id);
 CREATE INDEX IF NOT EXISTS idx_fee_payments_date ON fee_payments(payment_date);
 CREATE INDEX IF NOT EXISTS idx_fee_payments_student_bill ON fee_payments(student_id, bill_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fee_payments_transaction_id_unique
+  ON fee_payments(transaction_id)
+  WHERE transaction_id IS NOT NULL AND transaction_id <> '';
 
 -- =====================================================
 -- 5. PREVIOUS DUES TABLE
@@ -585,6 +595,8 @@ COMMENT ON COLUMN fee_structures.is_optional IS 'Whether this fee is optional (e
 COMMENT ON COLUMN fee_bills.bill_status IS 'Status: paid, unpaid, or partial';
 COMMENT ON COLUMN fee_bills.month IS 'Month in YYYY-MM format (e.g., 2024-01)';
 COMMENT ON COLUMN fee_payments.payment_mode IS 'Payment method: cash, cheque, online, bank_transfer';
+COMMENT ON COLUMN fee_payments.transaction_id IS 'Optional transaction or idempotency key for a payment';
+COMMENT ON COLUMN fee_payments.receipt_no IS 'Optional receipt number assigned to the payment';
 
 -- Add comments only if columns exist
 DO $$ 
@@ -1088,19 +1100,19 @@ select pg_notify('pgrst', 'reload schema');
 -- ============================================================
 -- 17. docs_migrations/STUDENTS_ADMISSION_FIELDS_SETUP.sql
 -- ============================================================
--- Student admission fields setup for Supabase.
--- Run this in Supabase SQL Editor before using Admission Number/Date in student forms.
+-- Student username / DOB setup for Supabase.
+-- Run this in Supabase SQL Editor before using Username / DOB in student forms.
 
 alter table public.students
-  add column if not exists admission_number text,
-  add column if not exists admission_date date;
+  add column if not exists username text,
+  add column if not exists date_of_birth date;
 
-create unique index if not exists idx_students_admission_number_unique
-  on public.students (admission_number)
-  where admission_number is not null and admission_number <> '';
+create unique index if not exists idx_students_username_unique
+  on public.students (username)
+  where username is not null and username <> '';
 
-create index if not exists idx_students_admission_date
-  on public.students (admission_date);
+create index if not exists idx_students_date_of_birth
+  on public.students (date_of_birth);
 
 notify pgrst, 'reload schema';
 select pg_notify('pgrst', 'reload schema');
@@ -1268,10 +1280,20 @@ create table if not exists public.student_auth (
   username text not null unique,
   password_hash text not null,
   is_active boolean not null default true,
+  must_reset_password boolean not null default true,
   last_login_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.student_auth
+  add column if not exists must_reset_password boolean not null default true;
+
+update public.student_auth
+set must_reset_password = coalesce(must_reset_password, true);
+
+comment on column public.student_auth.must_reset_password
+  is 'Whether student must set a new password after first DOB login';
 
 create table if not exists public.attendance_records (
   id uuid primary key default gen_random_uuid(),
@@ -1345,6 +1367,17 @@ begin
 end;
 $$;
 
+create or replace function public.set_holiday_calendar_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.holiday_date = coalesce(new.holiday_date, new.start_date);
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 drop trigger if exists trg_teacher_assignments_updated_at on public.teacher_assignments;
 create trigger trg_teacher_assignments_updated_at
 before update on public.teacher_assignments
@@ -1363,7 +1396,7 @@ for each row execute function public.set_updated_at();
 drop trigger if exists trg_holiday_calendar_updated_at on public.holiday_calendar;
 create trigger trg_holiday_calendar_updated_at
 before update on public.holiday_calendar
-for each row execute function public.set_updated_at();
+for each row execute function public.set_holiday_calendar_updated_at();
 
 alter table public.teacher_assignments enable row level security;
 alter table public.student_auth enable row level security;
@@ -1751,6 +1784,77 @@ with check (auth.role() = 'service_role');
 drop policy if exists "teacher_notifications_service_role_all" on public.teacher_notifications;
 create policy "teacher_notifications_service_role_all"
 on public.teacher_notifications
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+-- ============================================================
+-- 26. docs_migrations/021_add_student_push_notifications.sql
+-- ============================================================
+-- Student push notification support for bill generation and payment alerts.
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.student_push_tokens (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.students(id) on delete cascade,
+  push_token text not null unique,
+  platform text,
+  device_id text,
+  is_active boolean not null default true,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_student_push_tokens_student_id
+  on public.student_push_tokens (student_id);
+
+create index if not exists idx_student_push_tokens_active
+  on public.student_push_tokens (student_id, is_active, last_seen_at desc);
+
+create table if not exists public.student_notifications (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.students(id) on delete cascade,
+  notification_type text not null default 'general',
+  source_type text,
+  source_id uuid,
+  title text not null,
+  body text not null,
+  notification_data jsonb not null default '{}'::jsonb,
+  delivery_status text not null default 'queued',
+  is_read boolean not null default false,
+  read_at timestamptz,
+  sent_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_student_notifications_student_created
+  on public.student_notifications (student_id, created_at desc);
+
+create index if not exists idx_student_notifications_student_read
+  on public.student_notifications (student_id, is_read, created_at desc);
+
+create index if not exists idx_student_notifications_source
+  on public.student_notifications (source_type, source_id);
+
+alter table public.student_push_tokens enable row level security;
+alter table public.student_notifications enable row level security;
+
+grant all on table public.student_push_tokens to service_role;
+grant all on table public.student_notifications to service_role;
+
+drop policy if exists "student_push_tokens_service_role_all" on public.student_push_tokens;
+create policy "student_push_tokens_service_role_all"
+on public.student_push_tokens
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "student_notifications_service_role_all" on public.student_notifications;
+create policy "student_notifications_service_role_all"
+on public.student_notifications
 for all
 using (auth.role() = 'service_role')
 with check (auth.role() = 'service_role');
