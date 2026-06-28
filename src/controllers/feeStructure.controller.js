@@ -8,6 +8,18 @@ const STANDARD_FEE_NAMES = [
   "Annual Fee",
 ];
 
+const normalizeClassToken = (value) => {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  return text.toLowerCase() === "mother care" ? "Nursery" : text;
+};
+
+const buildClassVariants = (value) => {
+  const normalized = normalizeClassToken(value);
+  if (!normalized) return [];
+  return normalized === "Nursery" ? ["Nursery", "Mother Care"] : [normalized];
+};
+
 /**
  * Create a fee structure entry (normalized)
  * - One-time-per-class create: if any fee rows exist for the class, CREATE will be rejected.
@@ -37,18 +49,19 @@ export const createFeeStructure = async (req, res) => {
       if (!rows || rows.length === 0) return res.status(400).json({ message: 'Request body must be a non-empty array' });
 
       // All items must include `class` and belong to the same class (single-class bulk)
-      const classes = rows.map(r => r?.class).filter(Boolean);
+      const classes = rows.map(r => normalizeClassToken(r?.class)).filter(Boolean);
       if (classes.length === 0) return res.status(400).json({ message: 'class is required in array items' });
       const uniqueClasses = [...new Set(classes)];
       if (uniqueClasses.length > 1) return res.status(400).json({ message: 'All items must belong to the same class' });
 
       const bulkClass = uniqueClasses[0];
+      const bulkClassVariants = buildClassVariants(bulkClass);
 
       // Prevent duplicate 'create' for same class
       const { data: existingForBulk, error: existsBulkErr } = await supabase
         .from('fee_structures')
         .select('id')
-        .eq('class', bulkClass)
+        .in('class', bulkClassVariants)
         .limit(1)
         .maybeSingle();
 
@@ -95,14 +108,16 @@ export const createFeeStructure = async (req, res) => {
       return res.status(201).json({ message: 'Fee structures created', count: inserted.length, data: inserted });
     }
 
-    if (!className) return res.status(400).json({ message: "class is required" });
+    const normalizedClassName = normalizeClassToken(className);
+    if (!normalizedClassName) return res.status(400).json({ message: "class is required" });
+    const classVariants = buildClassVariants(normalizedClassName);
 
     // Section is ignored for fee rules (fee structures are per-class)
     // => Prevent duplicate 'create' for same class (use UPDATE/DELETE to change)
     const { data: existing, error: existsErr } = await supabase
       .from('fee_structures')
       .select('id')
-      .eq('class', className)
+      .in('class', classVariants)
       .limit(1)
       .maybeSingle();
 
@@ -128,10 +143,10 @@ export const createFeeStructure = async (req, res) => {
       }
 
       const rows = [];
-      if (tuition_fee && tuition_fee > 0) rows.push({ class: className, section: null, fee_name: 'Tuition Fee', fee_amount: parseFloat(tuition_fee), is_optional: false, period: 'monthly', late_fine_enabled: !!late_fine_enabled });
-      if (exam_fee && exam_fee > 0) rows.push({ class: className, section: null, fee_name: 'Exam Fee', fee_amount: parseFloat(exam_fee), is_optional: true, period: 'monthly', late_fine_enabled: !!late_fine_enabled });
-      if (computer_fee && computer_fee > 0) rows.push({ class: className, section: null, fee_name: 'Computer Fee', fee_amount: parseFloat(computer_fee), is_optional: true, period: 'monthly', late_fine_enabled: !!late_fine_enabled });
-      if (annual_fee && annual_fee > 0) rows.push({ class: className, section: null, fee_name: 'Annual Fee', fee_amount: parseFloat(annual_fee), is_optional: true, period: 'yearly', late_fine_enabled: !!late_fine_enabled });
+      if (tuition_fee && tuition_fee > 0) rows.push({ class: normalizedClassName, section: null, fee_name: 'Tuition Fee', fee_amount: parseFloat(tuition_fee), is_optional: false, period: 'monthly', late_fine_enabled: !!late_fine_enabled });
+      if (exam_fee && exam_fee > 0) rows.push({ class: normalizedClassName, section: null, fee_name: 'Exam Fee', fee_amount: parseFloat(exam_fee), is_optional: true, period: 'monthly', late_fine_enabled: !!late_fine_enabled });
+      if (computer_fee && computer_fee > 0) rows.push({ class: normalizedClassName, section: null, fee_name: 'Computer Fee', fee_amount: parseFloat(computer_fee), is_optional: true, period: 'monthly', late_fine_enabled: !!late_fine_enabled });
+      if (annual_fee && annual_fee > 0) rows.push({ class: normalizedClassName, section: null, fee_name: 'Annual Fee', fee_amount: parseFloat(annual_fee), is_optional: true, period: 'yearly', late_fine_enabled: !!late_fine_enabled });
 
       if (rows.length === 0) return res.status(400).json({ message: 'No non-zero fee values provided' });
 
@@ -159,7 +174,7 @@ export const createFeeStructure = async (req, res) => {
     }
 
     const insertRow = {
-      class: className,
+      class: normalizedClassName,
       section: null, // section ignored
       fee_name: canonical,
       fee_amount: parseFloat(fee_amount),
@@ -187,7 +202,7 @@ export const getFeeStructures = async (req, res) => {
     const { class: className, period } = req.query;
 
     let q = supabase.from("fee_structures").select("*");
-    if (className) q = q.eq("class", className);
+    if (className) q = q.in("class", buildClassVariants(className));
     // section intentionally ignored (fee rules are per-class)
     if (period) q = q.eq("period", period);
 
@@ -196,7 +211,12 @@ export const getFeeStructures = async (req, res) => {
     const { data, error } = await q;
     if (error) return res.status(500).json({ message: "Failed to fetch fee structures", error: error.message });
 
-    res.json({ message: "Fee structures fetched", count: data?.length || 0, data });
+    const normalizedData = (data || []).map((row) => ({
+      ...row,
+      class: normalizeClassToken(row.class),
+    }));
+
+    res.json({ message: "Fee structures fetched", count: normalizedData.length, data: normalizedData });
   } catch (err) {
     console.error("getFeeStructures error:", err);
     res.status(500).json({ message: "Server error", error: err.message });

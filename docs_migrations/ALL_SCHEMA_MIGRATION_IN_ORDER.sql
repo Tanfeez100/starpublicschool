@@ -1,10 +1,161 @@
 ﻿-- Full schema migration generated from DB_SCHEMA_AND_FUNCTIONS_ORDERED.md
 -- Order matches the documentation. Destructive/data-only utility steps are noted and skipped.
--- Run on a database where Supabase auth schema and the base students/user_roles tables already exist.
+-- Run on a database where the Supabase auth schema already exists.
 
 create extension if not exists "uuid-ossp";
 create extension if not exists pgcrypto;
 
+
+-- ============================================================
+-- 0. Base compatibility tables
+-- ============================================================
+-- These tables are referenced by later migrations and existing backend code.
+-- Keeping them here allows a blank database to bootstrap cleanly.
+
+create table if not exists public.students (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  father_name text,
+  mother_name text,
+  gender text,
+  class text not null,
+  section text not null,
+  roll_no integer not null,
+  academic_year text not null,
+  status text not null default 'active',
+  left_date date,
+  mobile text,
+  address text,
+  uses_transport boolean not null default false,
+  transport_charge numeric(10,2),
+  aadhaar_card varchar(12),
+  pen_number varchar(32),
+  admission_number text,
+  admission_date date,
+  photo_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_students_status check (status in ('active', 'inactive')),
+  constraint chk_students_class_allowed check (class in ('Nursery', 'LKG', 'UKG', '1', '2', '3', '4', '5', '6', '7', '8')),
+  constraint chk_students_academic_year_format check (academic_year ~ '^\d{4}-(\d{2}|\d{4})$'),
+  constraint chk_students_roll_no_positive check (roll_no > 0),
+  constraint chk_students_left_date_consistency check (
+    (status = 'active' and left_date is null) or
+    (status = 'inactive' and left_date is not null)
+  )
+);
+
+create index if not exists idx_students_class on public.students (class);
+create index if not exists idx_students_class_section_year on public.students (class, section, academic_year);
+create index if not exists idx_students_roll_no on public.students (roll_no);
+create index if not exists idx_students_admission_date on public.students (admission_date);
+create index if not exists idx_students_aadhaar on public.students (aadhaar_card);
+create index if not exists idx_students_pen_number on public.students (pen_number);
+create unique index if not exists idx_students_admission_number_unique
+  on public.students (admission_number)
+  where admission_number is not null and admission_number <> '';
+create unique index if not exists uq_students_roll_active_per_year
+  on public.students (class, section, academic_year, roll_no)
+  where status = 'active';
+
+create table if not exists public.user_roles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  role text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_user_roles_role check (role in ('admin', 'teacher'))
+);
+
+create index if not exists idx_user_roles_role on public.user_roles (role);
+
+create table if not exists public.fee_structure (
+  id uuid primary key default gen_random_uuid(),
+  class text not null,
+  section text,
+  tuition_fee numeric(10,2) not null default 0,
+  exam_fee numeric(10,2) not null default 0,
+  annual_fee numeric(10,2) not null default 0,
+  computer_fee numeric(10,2) not null default 0,
+  fee_name text,
+  fee_amount numeric(10,2),
+  is_optional boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_fee_structure_class on public.fee_structure (class);
+create index if not exists idx_fee_structure_class_section on public.fee_structure (class, section);
+create index if not exists idx_fee_structure_fee_name on public.fee_structure (fee_name);
+
+create table if not exists public.fees (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.students(id) on delete cascade,
+  class text not null,
+  section text,
+  roll_no integer not null,
+  month varchar(7) not null,
+  year int not null,
+  tuition_fee numeric(10,2) not null default 0,
+  exam_fee numeric(10,2) not null default 0,
+  annual_fee numeric(10,2) not null default 0,
+  computer_fee numeric(10,2) not null default 0,
+  transport_fee numeric(10,2) not null default 0,
+  previous_due numeric(10,2) not null default 0,
+  advance numeric(10,2) not null default 0,
+  fine numeric(10,2) not null default 0,
+  total_amount numeric(10,2) not null default 0,
+  net_payable numeric(10,2) not null default 0,
+  paid_amount numeric(10,2) not null default 0,
+  bill_status varchar(20) not null default 'unpaid',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_fees_month_format check (month ~ '^\d{4}-\d{2}$'),
+  constraint chk_fees_bill_status check (bill_status in ('paid', 'unpaid', 'partial'))
+);
+
+create index if not exists idx_fees_student on public.fees (student_id);
+create index if not exists idx_fees_student_month on public.fees (student_id, month);
+create index if not exists idx_fees_month on public.fees (month);
+create index if not exists idx_fees_year on public.fees (year);
+create index if not exists idx_fees_status on public.fees (bill_status);
+
+alter table public.students enable row level security;
+alter table public.user_roles enable row level security;
+alter table public.fee_structure enable row level security;
+alter table public.fees enable row level security;
+
+grant all on table public.students to service_role;
+grant all on table public.user_roles to service_role;
+grant all on table public.fee_structure to service_role;
+grant all on table public.fees to service_role;
+
+drop policy if exists "students_service_role_all" on public.students;
+create policy "students_service_role_all"
+on public.students
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "user_roles_service_role_all" on public.user_roles;
+create policy "user_roles_service_role_all"
+on public.user_roles
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "fee_structure_service_role_all" on public.fee_structure;
+create policy "fee_structure_service_role_all"
+on public.fee_structure
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "fees_service_role_all" on public.fees;
+create policy "fees_service_role_all"
+on public.fees
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
 
 -- ============================================================
 -- 1. migrations/001_create_subjects_table.sql
@@ -1374,5 +1525,235 @@ select pg_notify('pgrst', 'reload schema');
 -- Skipped here because it inserts demo data.
 
 -- Refresh Supabase/PostgREST schema cache after all changes.
+notify pgrst, 'reload schema';
+select pg_notify('pgrst', 'reload schema');
+
+-- ============================================================
+-- 24. docs_migrations/TEACHER_GPS_ATTENDANCE_MODULE.sql
+-- ============================================================
+-- Teacher Management & GPS Attendance Module
+-- Run this in Supabase SQL editor before using /api/teacher-attendance.
+
+do $$ begin
+  create type teacher_attendance_status as enum (
+    'present_provisional',
+    'present',
+    'late',
+    'half_day',
+    'absent',
+    'leave',
+    'holiday',
+    'checkout_missing',
+    'rejected'
+  );
+exception
+  when duplicate_object then null;
+end $$;
+
+create table if not exists public.teacher_profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  employee_id text unique,
+  full_name text not null default '',
+  mobile text,
+  email text,
+  gender text,
+  date_of_birth date,
+  qualification text,
+  designation text,
+  department text,
+  joining_date date,
+  address text,
+  emergency_contact text,
+  photo_url text,
+  status text not null default 'active' check (status in ('active', 'inactive')),
+  username text unique,
+  must_reset_password boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz
+);
+
+create table if not exists public.teacher_attendance_settings (
+  id uuid primary key default gen_random_uuid(),
+  school_id uuid,
+  school_name text not null default 'Star Public School',
+  latitude numeric(10,7) not null,
+  longitude numeric(10,7) not null,
+  radius_meters integer not null default 150 check (radius_meters > 0),
+  gps_accuracy_meters integer not null default 80 check (gps_accuracy_meters > 0),
+  school_start_time time not null default '07:00',
+  school_end_time time not null default '13:00',
+  grace_minutes integer not null default 15 check (grace_minutes >= 0),
+  checkout_deadline time not null default '14:00',
+  minimum_working_minutes integer not null default 180 check (minimum_working_minutes >= 0),
+  late_after_minutes integer not null default 15 check (late_after_minutes >= 0),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid,
+  updated_by uuid
+);
+
+create unique index if not exists teacher_attendance_settings_one_active
+on public.teacher_attendance_settings ((is_active))
+where is_active = true;
+
+create table if not exists public.teacher_attendance_records (
+  id uuid primary key default gen_random_uuid(),
+  teacher_id uuid not null references auth.users(id) on delete restrict,
+  school_id uuid,
+  attendance_date date not null,
+  status teacher_attendance_status not null default 'present_provisional',
+  check_in_at timestamptz,
+  check_in_latitude numeric(10,7),
+  check_in_longitude numeric(10,7),
+  check_in_accuracy numeric(8,2),
+  check_in_distance_meters numeric(10,2),
+  check_out_at timestamptz,
+  check_out_latitude numeric(10,7),
+  check_out_longitude numeric(10,7),
+  check_out_accuracy numeric(8,2),
+  check_out_distance_meters numeric(10,2),
+  working_minutes integer not null default 0,
+  device_id text,
+  checkout_missing_reason text,
+  checkout_missing_remarks text,
+  checkout_request_status text not null default 'none' check (checkout_request_status in ('none', 'pending', 'approved', 'rejected')),
+  admin_remarks text,
+  decided_by uuid,
+  decided_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  unique (teacher_id, attendance_date)
+);
+
+create index if not exists teacher_attendance_records_date_idx
+on public.teacher_attendance_records (attendance_date desc);
+
+create index if not exists teacher_attendance_records_teacher_date_idx
+on public.teacher_attendance_records (teacher_id, attendance_date desc);
+
+create index if not exists teacher_attendance_records_status_idx
+on public.teacher_attendance_records (status);
+
+create table if not exists public.teacher_leave_requests (
+  id uuid primary key default gen_random_uuid(),
+  teacher_id uuid not null references auth.users(id) on delete restrict,
+  leave_type text not null,
+  from_date date not null,
+  to_date date not null,
+  reason text not null,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  admin_remarks text,
+  decided_by uuid,
+  decided_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  check (to_date >= from_date)
+);
+
+create index if not exists teacher_leave_requests_teacher_date_idx
+on public.teacher_leave_requests (teacher_id, from_date desc, to_date desc);
+
+create index if not exists teacher_leave_requests_status_idx
+on public.teacher_leave_requests (status);
+
+create table if not exists public.teacher_attendance_audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  teacher_id uuid,
+  attendance_id uuid,
+  action text not null,
+  old_data jsonb,
+  new_data jsonb,
+  actor_id uuid,
+  actor_role text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists teacher_attendance_audit_teacher_idx
+on public.teacher_attendance_audit_logs (teacher_id, created_at desc);
+
+create index if not exists teacher_attendance_audit_attendance_idx
+on public.teacher_attendance_audit_logs (attendance_id, created_at desc);
+
+create table if not exists public.teacher_notifications (
+  id uuid primary key default gen_random_uuid(),
+  teacher_id uuid references auth.users(id) on delete cascade,
+  title text not null,
+  message text not null,
+  type text not null default 'info',
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists teacher_notifications_teacher_idx
+on public.teacher_notifications (teacher_id, is_read, created_at desc);
+
+notify pgrst, 'reload schema';
+select pg_notify('pgrst', 'reload schema');
+
+-- ============================================================
+-- 25. migrations/016_teacher_attendance_rls_policies.sql
+-- ============================================================
+-- Teacher attendance RLS setup
+-- Run after the teacher attendance module tables already exist.
+
+alter table public.teacher_profiles enable row level security;
+alter table public.teacher_attendance_settings enable row level security;
+alter table public.teacher_attendance_records enable row level security;
+alter table public.teacher_leave_requests enable row level security;
+alter table public.teacher_attendance_audit_logs enable row level security;
+alter table public.teacher_notifications enable row level security;
+
+drop policy if exists "teacher_profiles_service_role_all" on public.teacher_profiles;
+create policy "teacher_profiles_service_role_all"
+on public.teacher_profiles
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "teacher_attendance_settings_service_role_all" on public.teacher_attendance_settings;
+create policy "teacher_attendance_settings_service_role_all"
+on public.teacher_attendance_settings
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "teacher_attendance_records_service_role_all" on public.teacher_attendance_records;
+create policy "teacher_attendance_records_service_role_all"
+on public.teacher_attendance_records
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "teacher_leave_requests_service_role_all" on public.teacher_leave_requests;
+create policy "teacher_leave_requests_service_role_all"
+on public.teacher_leave_requests
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "teacher_attendance_audit_logs_service_role_all" on public.teacher_attendance_audit_logs;
+create policy "teacher_attendance_audit_logs_service_role_all"
+on public.teacher_attendance_audit_logs
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
+drop policy if exists "teacher_notifications_service_role_all" on public.teacher_notifications;
+create policy "teacher_notifications_service_role_all"
+on public.teacher_notifications
+for all
+using (auth.role() = 'service_role')
+with check (auth.role() = 'service_role');
+
 notify pgrst, 'reload schema';
 select pg_notify('pgrst', 'reload schema');

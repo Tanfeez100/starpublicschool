@@ -9,6 +9,7 @@ checking Supabase SQL changes.
 Run or review the numbered migrations first, then the setup SQL files that were
 kept under `docs_migrations`.
 
+0. `docs_migrations/ALL_SCHEMA_MIGRATION_IN_ORDER.sql` base compatibility block for `students`, `user_roles`, legacy `fees`, and legacy `fee_structure`
 1. `migrations/001_create_subjects_table.sql`
 2. `migrations/002_create_user_sessions.sql`
 3. `migrations/002_seed_subjects_and_curriculum.sql`
@@ -32,6 +33,8 @@ kept under `docs_migrations`.
 21. `docs_migrations/HOLIDAY_CALENDAR_SETUP.sql` - same schema as migration 015, kept for Supabase SQL Editor setup
 22. `docs_migrations/RENAME_MOTHER_CARE_TO_NURSERY.sql` - data update utility
 23. `docs_migrations/SEED_STUDENTS_ALL_CLASSES.sql` - demo data seed utility
+24. `docs_migrations/TEACHER_GPS_ATTENDANCE_MODULE.sql`
+25. `migrations/016_teacher_attendance_rls_policies.sql`
 
 ## Chronological Schema
 
@@ -635,12 +638,12 @@ This list comes from Supabase `.from(...)` references in `GPS-BACKEND/src`.
 
 ## Tables Referenced but Not Fully Created by Current Migration Files
 
-These are used or referenced by the app, but their base creation SQL is not in
-the numbered migrations collected above.
+These are used or referenced by the app. The consolidated migration now creates
+the base compatibility tables at the top.
 
 - `students`
-  - Base table exists in Supabase/project history.
-  - Later migrations add `uses_transport`, `aadhaar_card`, `photo_url`, `pen_number`, `admission_number`, and `admission_date`.
+  - Base student master table used by billing, attendance, marks, and results.
+  - Later migrations and scripts add admission fields and school-specific compatibility columns.
 
 - `fees`
   - Legacy table referenced by early optional-fee migration and clear-data scripts.
@@ -652,7 +655,7 @@ the numbered migrations collected above.
 
 - `user_roles`
   - Used by auth routes and preserved by clear-data scripts.
-  - Base creation is not present in the current migration list.
+  - Base creation is included in the consolidated migration compatibility block.
 
 - `auth.users`
   - Supabase managed auth table.
@@ -660,6 +663,5 @@ the numbered migrations collected above.
 ## Recommended Cleanup for Future
 
 - Add a new migration for missing RPC definitions if Supabase has them but the repo does not.
-- Add or recover base migrations for `students`, `user_roles`, legacy `fees`, and legacy `fee_structure`.
 - Move the `student_auth` and `attendance_records` SQL block from the markdown document into a numbered migration.
 - Keep `holiday_date` only for compatibility; use `start_date` and `end_date` as the source of truth for holidays.
