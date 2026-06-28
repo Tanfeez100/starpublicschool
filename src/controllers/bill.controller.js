@@ -2,6 +2,18 @@ import { generateBillsPDF } from "../services/pdfGenerator.js";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase.js";
 import { calculatePreviousDue } from "../utils/feeHelper.js";
+
+const normalizeClassToken = (value) => {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  return text.toLowerCase() === "mother care" ? "Nursery" : text;
+};
+
+const buildClassVariants = (value) => {
+  const normalized = normalizeClassToken(value);
+  if (!normalized) return [];
+  return normalized === "Nursery" ? ["Nursery", "Mother Care"] : [normalized];
+};
 // Admin client for bill operations (uses service role key to bypass RLS)
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
@@ -30,6 +42,8 @@ export const getBillsDownloadData = async (req, res) => {
       return res.status(400).json({ message: "Invalid month format. Use YYYY-MM" });
     }
 
+    const classVariants = buildClassVariants(className);
+
     // ✅ STEP 1: Fetch ONLY active student IDs (exclude inactive/left students)
     let studentQuery = supabaseAdmin
       .from("students")
@@ -37,7 +51,7 @@ export const getBillsDownloadData = async (req, res) => {
       .eq("status", "active"); // Only active students
 
     if (className) {
-      studentQuery = studentQuery.eq("class", className);
+      studentQuery = studentQuery.in("class", classVariants);
     }
 
     const { data: activeStudents, error: studentError } = await studentQuery;
@@ -192,6 +206,7 @@ export const createBillsForClass = async (className, month, section = null, opti
   }
 
   const year = parseInt(month.split("-")[0], 10);
+  const classVariants = buildClassVariants(className);
 
   // 🔒 Prevent generation for closed month
   const { data: closedRow } = await supabaseAdmin
@@ -208,7 +223,7 @@ export const createBillsForClass = async (className, month, section = null, opti
   let studentQuery = supabaseAdmin
     .from("students")
     .select("id, uses_transport, transport_charge, section")
-    .eq("class", className)
+    .in("class", classVariants)
     .eq("status", "active");
 
   if (section) {
@@ -225,7 +240,7 @@ export const createBillsForClass = async (className, month, section = null, opti
   const { data: feeRows } = await supabaseAdmin
     .from("fee_structures")
     .select("fee_name, fee_amount")
-    .eq("class", className);
+    .in("class", classVariants);
 
   let tuition = 0,
     exam = 0,

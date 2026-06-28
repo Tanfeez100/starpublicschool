@@ -296,6 +296,12 @@ router.get("/all", adminOrTeacher, async (req, res) => {
 router.get("/classes", adminOrTeacher, async (req, res) => {
   try {
     const includeInactive = parseBooleanQuery(req.query.include_inactive, false);
+    const classSortOrder = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8"];
+    const getClassOrder = (className) => {
+      const normalizedClass = String(className || "").trim();
+      const index = classSortOrder.indexOf(normalizedClass);
+      return index === -1 ? classSortOrder.length : index;
+    };
 
     let query = supabase
       .from("students")
@@ -312,13 +318,17 @@ router.get("/classes", adminOrTeacher, async (req, res) => {
 
     const classesMap = {};
     (data || []).forEach((row) => {
-      const cls = row.class || "";
+      const rawClass = String(row.class || "").trim();
+      const cls = rawClass === "Mother Care" ? "Nursery" : rawClass;
       const sec = row.section || null;
+      if (!cls) return;
       if (!classesMap[cls]) classesMap[cls] = new Set();
       if (sec) classesMap[cls].add(sec);
     });
 
-    const classesArray = Object.keys(classesMap).filter((c) => c !== "");
+    const classesArray = Object.keys(classesMap)
+      .filter((c) => c !== "")
+      .sort((a, b) => getClassOrder(a) - getClassOrder(b) || a.localeCompare(b));
     const sectionsMap = {};
     classesArray.forEach((c) => {
       sectionsMap[c] = Array.from(classesMap[c]);

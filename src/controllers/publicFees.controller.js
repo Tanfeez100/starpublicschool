@@ -105,6 +105,9 @@ const normalizeClassForCompare = (value) => {
 
   const classWordMatch = text.match(/^class(.+)$/);
   const core = classWordMatch ? classWordMatch[1] : text;
+  if (core === "mothercare" || core === "mother care" || core === "nursery") {
+    return "NURSERY";
+  }
   const numericMatch = core.match(/^0*(\d+)(st|nd|rd|th)?$/);
   if (numericMatch) return String(Number.parseInt(numericMatch[1], 10));
 

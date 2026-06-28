@@ -3,11 +3,17 @@ import { getDues, getTotalPaid, getTotalFee, calculateAdvance } from "../utils/f
 
 const toSafeString = (value) => String(value ?? "").trim();
 
-const normalizeClassToken = (value) =>
-  toSafeString(value)
-    .toUpperCase()
-    .replace(/\s+/g, " ")
-    .replace(/\./g, "");
+const normalizeClassToken = (value) => {
+  const text = toSafeString(value).replace(/\s+/g, " ");
+  if (!text) return "";
+  return text.toLowerCase() === "mother care" ? "Nursery" : text;
+};
+
+const buildClassVariants = (value) => {
+  const normalized = normalizeClassToken(value);
+  if (!normalized) return [];
+  return normalized === "Nursery" ? ["Nursery", "Mother Care"] : [normalized];
+};
 
 const resolveCurrentStudentForPayment = async ({
   className,
@@ -15,13 +21,14 @@ const resolveCurrentStudentForPayment = async ({
   section,
 }) => {
   const classToken = normalizeClassToken(className);
+  const classVariants = buildClassVariants(classToken);
   const rollToken = toSafeString(rollNumber);
   const sectionToken = toSafeString(section);
 
   let query = supabase
     .from("students")
     .select("id, class, section, roll_no, status, academic_year, created_at")
-    .eq("class", classToken)
+    .in("class", classVariants)
     .eq("roll_no", rollToken)
     .eq("status", "active")
     .order("academic_year", { ascending: false })
@@ -46,7 +53,7 @@ const resolveCurrentStudentForPayment = async ({
   let fallbackQuery = supabase
     .from("students")
     .select("id, class, section, roll_no, status, academic_year, created_at")
-    .eq("class", classToken)
+    .in("class", classVariants)
     .eq("roll_no", rollToken)
     .eq("status", "active")
     .order("academic_year", { ascending: false })
@@ -244,7 +251,7 @@ export const getFeeList = async (req, res) => {
       .select("id, name, father_name, roll_no, class, section")
       .eq("status", "active"); // ✅ Only active students
 
-    if (className) studentQuery = studentQuery.eq("class", className);
+    if (className) studentQuery = studentQuery.in("class", buildClassVariants(className));
     if (section) studentQuery = studentQuery.eq("section", section);
 
     const { data: students, error: studentErr } = await studentQuery;
