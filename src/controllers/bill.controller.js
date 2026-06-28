@@ -2,6 +2,7 @@ import { generateBillsPDF } from "../services/pdfGenerator.js";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase.js";
 import { calculatePreviousDue } from "../utils/feeHelper.js";
+import { sendStudentPushNotification } from "../services/studentNotificationService.js";
 
 const normalizeClassToken = (value) => {
   const text = String(value ?? "").trim().replace(/\s+/g, " ");
@@ -426,6 +427,51 @@ export const createBillsForClass = async (className, month, section = null, opti
             amount: item.amount,
           }))
         );
+
+        if (!existingBill) {
+          const notificationTitle = migrationStudentData
+            ? `Opening balance added for ${month}`
+            : `Fee bill generated for ${month}`;
+          const notificationBody = `${student.name || "Student"} | Class ${student.class || "-"}${student.section ? `-${student.section}` : ""} | Due Rs. ${finalNetPayable.toFixed(2)} | Please make the payment within 5 days of bill generation.`;
+
+          try {
+            await sendStudentPushNotification({
+              studentId: student.id,
+              title: notificationTitle,
+              body: notificationBody,
+              notificationType: "bill_generated",
+              sourceType: "fee_bills",
+              sourceId: billId,
+              data: {
+                bill_id: billId,
+                month,
+                student: {
+                  id: student.id,
+                  name: student.name || null,
+                  class: student.class || null,
+                  section: student.section || null,
+                  roll_no: student.roll_no || null,
+                },
+                breakdown: {
+                  tuition_fee: tuition,
+                  exam_fee: include_exam_fee ? exam : 0,
+                  annual_fee: include_annual_fee ? annual : 0,
+                  computer_fee: include_computer_fee ? computer : 0,
+                  transport_fee: transport,
+                  previous_due: previousDue,
+                },
+                total_amount: totalAmount,
+                net_payable: finalNetPayable,
+                advance_used: totalAdvanceUsed,
+                items: standardizedItems,
+                payment_instruction: "Please make the payment within 5 days of bill generation.",
+                type: migrationStudentData ? "opening_balance" : "bill_generation",
+              },
+            });
+          } catch (notificationError) {
+            console.error("Bill generation notification failed:", notificationError);
+          }
+        }
 
         // ✅ Only update previous_dues status in NON-MIGRATION months
         // During migration, previous_dues table is not used at all

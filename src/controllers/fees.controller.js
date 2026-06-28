@@ -1,5 +1,9 @@
 import { supabase } from "../services/supabase.js";
 import { getDues, getTotalPaid, getTotalFee, calculateAdvance } from "../utils/feeHelper.js";
+import {
+  loadBillNotificationContext,
+  sendStudentPushNotification,
+} from "../services/studentNotificationService.js";
 
 const toSafeString = (value) => String(value ?? "").trim();
 
@@ -563,6 +567,42 @@ export const payFee = async (req, res) => {
     // rpcData may be returned as an object or array depending on Postgres/Supabase version
     const result = Array.isArray(rpcData) ? rpcData[0] : rpcData;
 
+    try {
+      const billContext = await loadBillNotificationContext(bill.id);
+      const amountPaid = Number.parseFloat(result?.amount_paid || amount || 0) || amount;
+      const remaining = Number.parseFloat(result?.remaining ?? billContext.summary.remaining ?? 0) || 0;
+      const paymentModeLabel = String(payment_mode || "").replace(/_/g, " ").toUpperCase();
+      const receiptNumber = result?.receipt_no || result?.receipt_number || billContext.summary.receipt_number || null;
+      const transactionId = result?.transaction_id || req.body.transaction_id || null;
+
+      await sendStudentPushNotification({
+        studentId,
+        title: `Fee payment recorded for ${billContext.month}`,
+        body: `${billContext.student?.name || "Student"} | Paid Rs. ${amountPaid.toFixed(2)} via ${paymentModeLabel || "PAYMENT"} | Remaining Rs. ${remaining.toFixed(2)}`,
+        notificationType: "fee_payment",
+        sourceType: "fee_payments",
+        sourceId: bill.id,
+        data: {
+          ...billContext,
+          payment: {
+            amount_paid: amountPaid,
+            payment_mode,
+            payment_date: payment_date || new Date().toISOString().slice(0, 10),
+            transaction_id: transactionId,
+            receipt_no: receiptNumber,
+          },
+          remaining,
+          payment_summary: {
+            bill_id: bill.id,
+            month: billContext.month,
+            status: remaining <= 0 ? "paid" : amountPaid > 0 ? "partial" : "unpaid",
+          },
+        },
+      });
+    } catch (notificationError) {
+      console.error("Fee payment notification failed:", notificationError);
+    }
+
     // 4) Return canonical response (use DB-returned values)
     return res.json({
       message: 'Payment processed successfully',
@@ -862,6 +902,28 @@ export const recordPayment = async (req, res) => {
       });
 
       if (error) return res.status(400).json({ message: error.message, detail: error });
+
+      try {
+        await sendStudentPushNotification({
+          studentId: student_id,
+          title: "Previous dues payment received",
+          body: `Rs. ${amount.toFixed(2)} adjusted against pending dues.`,
+          notificationType: "dues_payment",
+          sourceType: "previous_dues",
+          sourceId: null,
+          data: {
+            student_id,
+            amount_paid: amount,
+            payment_mode,
+            payment_date: payment_date || new Date().toISOString().split('T')[0],
+            month,
+            details: data,
+          },
+        });
+      } catch (notificationError) {
+        console.error('Dues payment notification failed:', notificationError);
+      }
+
       return res.json({ message: 'Dues payment applied', data });
     }
 
@@ -877,6 +939,30 @@ export const recordPayment = async (req, res) => {
         p_transaction_id: req.body.transaction_id || null
       });
       if (error) return res.status(400).json({ message: error.message, detail: error });
+
+      try {
+        const billContext = bill_id ? await loadBillNotificationContext(bill_id) : null;
+        await sendStudentPushNotification({
+          studentId: student_id,
+          title: "Advance recorded",
+          body: `Rs. ${amount.toFixed(2)} recorded as advance.`,
+          notificationType: "advance_payment",
+          sourceType: "advance_ledger",
+          sourceId: bill_id || null,
+          data: {
+            student_id,
+            amount_paid: amount,
+            payment_mode,
+            payment_date: payment_date || new Date().toISOString().split('T')[0],
+            month,
+            bill: billContext,
+            details: data,
+          },
+        });
+      } catch (notificationError) {
+        console.error('Advance payment notification failed:', notificationError);
+      }
+
       return res.json({ message: 'Advance recorded', data });
     }
 
@@ -893,6 +979,31 @@ export const recordPayment = async (req, res) => {
       });
 
       if (error) return res.status(400).json({ message: error.message, detail: error });
+
+      try {
+        const billContext = await loadBillNotificationContext(bill_id);
+        const transactionId = req.body.transaction_id || null;
+        await sendStudentPushNotification({
+          studentId: student_id,
+          title: `Fee payment recorded for ${billContext.month}`,
+          body: `${billContext.student?.name || "Student"} | Paid Rs. ${amount.toFixed(2)} via ${String(payment_mode || "").replace(/_/g, " ").toUpperCase()} | Remaining Rs. ${billContext.summary.remaining.toFixed(2)}`,
+          notificationType: "fee_payment",
+          sourceType: "fee_payments",
+          sourceId: bill_id,
+          data: {
+            ...billContext,
+            payment: {
+              amount_paid: amount,
+              payment_mode,
+              payment_date: payment_date || new Date().toISOString().split('T')[0],
+              transaction_id: transactionId,
+            },
+          },
+        });
+      } catch (notificationError) {
+        console.error('Bill payment notification failed:', notificationError);
+      }
+
       return res.json({ message: 'Payment applied to bill', data });
     }
 
@@ -908,6 +1019,28 @@ export const recordPayment = async (req, res) => {
     });
 
     if (unlinkedErr) return res.status(500).json({ message: unlinkedErr.message, detail: unlinkedErr });
+
+    try {
+      await sendStudentPushNotification({
+        studentId: student_id,
+        title: "Payment recorded",
+        body: `Rs. ${amount.toFixed(2)} payment recorded.`,
+        notificationType: "payment",
+        sourceType: "fee_payments",
+        sourceId: null,
+        data: {
+          student_id,
+          amount_paid: amount,
+          payment_mode,
+          payment_date: payment_date || new Date().toISOString().split('T')[0],
+          month,
+          details: unlinkedData,
+        },
+      });
+    } catch (notificationError) {
+      console.error('Unlinked payment notification failed:', notificationError);
+    }
+
     return res.json({ message: 'Payment recorded (unlinked)', data: unlinkedData });
   } catch (error) {
     console.error('Error recording payment:', error);
