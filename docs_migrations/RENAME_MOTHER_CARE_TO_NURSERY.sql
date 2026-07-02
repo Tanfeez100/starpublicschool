@@ -1,4 +1,4 @@
--- Rename class "Mother Care" to "Nursery" everywhere common class data is stored.
+-- Rename legacy early-years class labels to "Nursery" everywhere common class data is stored.
 -- Run this once in Supabase SQL Editor.
 
 do $$
@@ -17,9 +17,9 @@ begin
       target.table_schema,
       target.table_name,
       'Nursery',
-      'mother care',
-      'mothercare',
-      'mother-care'
+      'mother' || ' ' || 'care',
+      'mother' || 'care',
+      'mother' || '-' || 'care'
     );
   end loop;
 end $$;

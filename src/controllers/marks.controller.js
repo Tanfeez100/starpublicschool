@@ -1,50 +1,6 @@
 import { supabase } from "../services/supabase.js";
 
-const PROMOTION_TERMINALS = new Set(["annual", "final"]);
 const ALLOWED_RESULT_TERMINALS = new Set(["first", "second", "third", "annual"]);
-const PASSED_OUT_CLASS = "Passed Out";
-const PASSED_OUT_STATUS = "Passed Out";
-
-const normalizePromotionTerminal = (terminal) =>
-  String(terminal || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "")
-    .replace(/_/g, "")
-    .replace(/term$/, "");
-
-const normalizeClassForPromotion = (className) => {
-  const value = String(className || "").trim().toUpperCase();
-  const compact = value.replace(/[\s.]/g, "");
-
-  if (compact === "MOTHERCARE" || compact === "NURSERY") return "NURSERY";
-  if (compact === "LKG") return "LKG";
-  if (compact === "UKG") return "UKG";
-  if (/^[1-8]$/.test(compact)) return compact;
-
-  return value;
-};
-
-const getPromotionTarget = (className) => {
-  const normalizedClass = normalizeClassForPromotion(className);
-
-  if (normalizedClass === "NURSERY") return { nextClass: "LKG", passedOut: false };
-  if (normalizedClass === "LKG") return { nextClass: "UKG", passedOut: false };
-  if (normalizedClass === "UKG") return { nextClass: "1", passedOut: false };
-  if (normalizedClass === "1") return { nextClass: "2", passedOut: false };
-  if (normalizedClass === "2") return { nextClass: "3", passedOut: false };
-  if (normalizedClass === "3") return { nextClass: "4", passedOut: false };
-  if (normalizedClass === "4") return { nextClass: "5", passedOut: false };
-  if (normalizedClass === "5") return { nextClass: "6", passedOut: false };
-  if (normalizedClass === "6") return { nextClass: "7", passedOut: false };
-  if (normalizedClass === "7") return { nextClass: "8", passedOut: false };
-  if (normalizedClass === "8") return { nextClass: PASSED_OUT_CLASS, passedOut: true };
-
-  return null;
-};
-
-const shouldAutoPromote = (terminal) =>
-  PROMOTION_TERMINALS.has(normalizePromotionTerminal(terminal));
 
 const isMissingColumnError = (error, columnName) => {
   const message = String(error?.message || "").toLowerCase();
@@ -2036,54 +1992,6 @@ export const publishResult = async (req, res) => {
       }
     }
 
-    let promotion = null;
-    if (shouldAutoPromote(terminal)) {
-      const promotionTarget = getPromotionTarget(className);
-
-      if (!promotionTarget) {
-        errors.push(`Auto-promotion skipped: no promotion rule configured for class "${className}"`);
-      } else {
-        const promotedStudentIds = publishedResults.map((r) => r.student_id);
-
-        if (promotedStudentIds.length > 0) {
-          const { data: promotedRows, error: promoteError } = await supabase
-            .from("students")
-            .update({ class: promotionTarget.nextClass })
-            .in("id", promotedStudentIds)
-            .select("id");
-
-          if (promoteError) {
-            errors.push(`Auto-promotion failed for class "${className}": ${promoteError.message}`);
-          } else {
-            promotion = {
-              from_class: className,
-              to_class: promotionTarget.nextClass,
-              passed_out: promotionTarget.passedOut,
-              promoted_students: promotedRows?.length || promotedStudentIds.length,
-            };
-
-            if (promotionTarget.passedOut) {
-              const { data: statusRows, error: statusError } = await supabase
-                .from("students")
-                .update({ status: PASSED_OUT_STATUS })
-                .in("id", promotedStudentIds)
-                .select("id");
-
-              if (statusError) {
-                if (isMissingColumnError(statusError, "status")) {
-                  promotion.status_update = "skipped (students table has no status column)";
-                } else {
-                  errors.push(`Passed-out status update failed: ${statusError.message}`);
-                }
-              } else {
-                promotion.status_updated = statusRows?.length || promotedStudentIds.length;
-              }
-            }
-          }
-        }
-      }
-    }
-
     invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
 
     res.json({
@@ -2094,7 +2002,6 @@ export const publishResult = async (req, res) => {
       terminal,
       published: publishedResults.length,
       total_students: activeStudents.length,
-      promotion: promotion || undefined,
       results: publishedResults,
       errors: errors.length > 0 ? errors : undefined,
     });

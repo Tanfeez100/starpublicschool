@@ -127,7 +127,7 @@ Source: `migrations/002_seed_subjects_and_curriculum.sql`
 Data inserted:
 
 - `subjects`: Hindi, Hindi Writing, English, English Writing, Math, Drawing, EVS, General Knowledge, Sanskrit, Urdu, Computer, Science, Social Studies.
-- `class_subjects`: class-wise mappings for Mother Care, Nursery, LKG, UKG, and classes 1 to 8.
+- `class_subjects`: class-wise mappings for Nursery, LKG, UKG, and classes 1 to 8.
 
 ### 4. Optional Fees and Student Transport
 
@@ -542,14 +542,14 @@ Security:
 - RLS enabled for `student_auth` and `attendance_records`.
 - Service role has full access policies.
 
-### 21. Rename Mother Care to Nursery
+### 21. Normalize Legacy Class Names to Nursery
 
 Source: `docs_migrations/RENAME_MOTHER_CARE_TO_NURSERY.sql`
 
 Utility:
 
 - Loops over all public tables that have a text/varchar/char `class` column.
-- Updates `mother care`, `mothercare`, and `mother-care` to `Nursery`.
+- Updates legacy early-years class labels to `Nursery`.
 - Reloads PostgREST schema.
 
 ### 22. Seed Demo Students

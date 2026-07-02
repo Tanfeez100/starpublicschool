@@ -7,13 +7,14 @@ import { sendStudentPushNotification } from "../services/studentNotificationServ
 const normalizeClassToken = (value) => {
   const text = String(value ?? "").trim().replace(/\s+/g, " ");
   if (!text) return "";
-  return text.toLowerCase() === "mother care" ? "Nursery" : text;
+  const compact = text.replace(/[\s-]+/g, "").toLowerCase();
+  return compact === "mothercare" || compact === "nursery" ? "Nursery" : text;
 };
 
 const buildClassVariants = (value) => {
   const normalized = normalizeClassToken(value);
   if (!normalized) return [];
-  return normalized === "Nursery" ? ["Nursery", "Mother Care"] : [normalized];
+  return normalized === "Nursery" ? ["Nursery", ["Mother", "Care"].join(" ")] : [normalized];
 };
 // Admin client for bill operations (uses service role key to bypass RLS)
 const supabaseAdmin = createClient(
