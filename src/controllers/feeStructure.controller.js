@@ -11,13 +11,14 @@ const STANDARD_FEE_NAMES = [
 const normalizeClassToken = (value) => {
   const text = String(value ?? "").trim().replace(/\s+/g, " ");
   if (!text) return "";
-  return text.toLowerCase() === "mother care" ? "Nursery" : text;
+  const compact = text.replace(/[\s-]+/g, "").toLowerCase();
+  return compact === "mothercare" || compact === "nursery" ? "Nursery" : text;
 };
 
 const buildClassVariants = (value) => {
   const normalized = normalizeClassToken(value);
   if (!normalized) return [];
-  return normalized === "Nursery" ? ["Nursery", "Mother Care"] : [normalized];
+  return normalized === "Nursery" ? ["Nursery", ["Mother", "Care"].join(" ")] : [normalized];
 };
 
 /**

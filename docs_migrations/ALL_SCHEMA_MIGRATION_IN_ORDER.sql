@@ -287,12 +287,6 @@ INSERT INTO subjects (name, code, max_external_marks, max_internal_marks) VALUES
 ('Social Studies', 'SST', 80, 20)
 ON CONFLICT (code) DO NOTHING;
 
--- M.C to LKG subjects mapping
-INSERT INTO class_subjects (class, subject_id, sequence) 
-SELECT 'Mother Care', id, row_number() OVER (ORDER BY code) FROM subjects 
-WHERE code IN ('HND', 'HNW', 'ENG', 'ENW', 'MTH', 'DRW')
-ON CONFLICT DO NOTHING;
-
 INSERT INTO class_subjects (class, subject_id, sequence) 
 SELECT 'Nursery', id, row_number() OVER (ORDER BY code) FROM subjects 
 WHERE code IN ('HND', 'HNW', 'ENG', 'ENW', 'MTH', 'DRW')

@@ -388,7 +388,8 @@ router.get("/classes", adminOrTeacher, async (req, res) => {
     const classesMap = {};
     (data || []).forEach((row) => {
       const rawClass = String(row.class || "").trim();
-      const cls = rawClass === "Mother Care" ? "Nursery" : rawClass;
+      const normalizedClassToken = rawClass.replace(/[\s-]+/g, "").toLowerCase();
+      const cls = normalizedClassToken === "mothercare" || normalizedClassToken === "nursery" ? "Nursery" : rawClass;
       const sec = row.section || null;
       if (!cls) return;
       if (!classesMap[cls]) classesMap[cls] = new Set();
