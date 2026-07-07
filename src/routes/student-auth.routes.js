@@ -7,6 +7,8 @@ import { authenticate, authorize } from "../middleware/auth.middleware.js";
 const router = express.Router();
 
 const studentSelect = "*";
+const STUDENT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const STUDENT_SESSION_TTL_MS = STUDENT_SESSION_TTL_SECONDS * 1000;
 
 const isActiveStudentQuery = (query) => query.eq("status", "active");
 
@@ -205,12 +207,18 @@ router.post("/login", async (req, res) => {
       return res.status(500).json({ success: false, message: "Student login is not configured." });
     }
 
-    const accessToken = jwt.sign(user, jwtSecret, { expiresIn: "8h" });
+    const expiresAt = new Date(Date.now() + STUDENT_SESSION_TTL_MS);
+    const accessToken = jwt.sign(user, jwtSecret, { expiresIn: STUDENT_SESSION_TTL_SECONDS });
 
     return res.json({
       success: true,
       user,
       access_token: accessToken,
+      token_info: {
+        expires_at: expiresAt.toISOString(),
+        expires_in: STUDENT_SESSION_TTL_SECONDS,
+        note: "Login expires after 30 days.",
+      },
       must_reset_password: user.mustResetPassword,
       first_login: firstLogin,
     });

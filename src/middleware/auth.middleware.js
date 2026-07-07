@@ -67,7 +67,7 @@ export const authenticate = async (req, res, next) => {
     
     if (!tokenVerification.valid) {
       return res.status(401).json({ 
-        message: "Invalid or expired token. Please login again.",
+        message: "Login expired. Please login again.",
         error: "AUTHENTICATION_REQUIRED",
         note: "This API requires authentication. Only public result APIs are accessible without login."
       });

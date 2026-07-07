@@ -48,7 +48,8 @@ const supabaseAdmin = createClient(
   }
 );
 
-const APP_SESSION_TTL_SECONDS = 24 * 60 * 60;
+const APP_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const APP_SESSION_TTL_MS = APP_SESSION_TTL_SECONDS * 1000;
 const buildAppAccessToken = (user = {}, assignments = []) => {
   const jwtSecret = getAppJwtSecret();
   if (!jwtSecret) {
@@ -431,12 +432,12 @@ router.post("/login", async (req, res) => {
     }
 
     // 4️⃣ SUCCESS
-    // Calculate token expiration (24 hours from now)
+    // App login remains valid for 30 days.
     if (role === "teacher") {
       await ensureTeacherProfileCanLogin(data.user.id);
     }
 
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + APP_SESSION_TTL_MS);
     const assignments =
       role === "teacher"
         ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
@@ -475,8 +476,8 @@ router.post("/login", async (req, res) => {
       session: appSession,
       token_info: {
         expires_at: expiresAt.toISOString(),
-        expires_in: 86400, // 24 hours in seconds
-        note: "Token expires after 24 hours of inactivity. Use /api/auth/refresh to extend session.",
+        expires_in: APP_SESSION_TTL_SECONDS,
+        note: "Login expires after 30 days. Use /api/auth/refresh to extend session.",
       },
     });
 
@@ -1075,7 +1076,7 @@ router.post("/refresh", async (req, res) => {
       
       if (userError || !user) {
         return res.status(401).json({ 
-          message: "Invalid or expired token" 
+          message: "Login expired. Please login again." 
         });
       }
 
@@ -1099,13 +1100,13 @@ router.post("/refresh", async (req, res) => {
 
     if (error) {
       return res.status(401).json({ 
-        message: "Invalid or expired refresh token",
+        message: "Login expired. Please login again.",
         error: error.message 
       });
     }
 
-    // Calculate token expiration (24 hours from now)
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    // App login remains valid for 30 days after refresh.
+    const expiresAt = new Date(Date.now() + APP_SESSION_TTL_MS);
 
     // Get user role
     const { data: roleData, error: roleError } = await supabase
@@ -1158,7 +1159,8 @@ router.post("/refresh", async (req, res) => {
       session: appSession,
       token_info: {
         expires_at: expiresAt.toISOString(),
-        expires_in: 86400,
+        expires_in: APP_SESSION_TTL_SECONDS,
+        note: "Login expires after 30 days. Use /api/auth/refresh to extend session.",
       },
     });
 
