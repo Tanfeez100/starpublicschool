@@ -26,6 +26,14 @@ console.log(
   process.env.SUPABASE_SERVICE_KEY ? "OK" : "MISSING"
 );
 
+app.get("/", (req, res) => {
+  res.status(200).send("School Management API is running.");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 app.get("/api/health", (req, res) => {
   res.json({
     success: true,
