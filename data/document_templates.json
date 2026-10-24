@@ -1,0 +1,96 @@
+{
+  "id_card": {
+    "category": "id_card",
+    "activeTemplateId": "id_card_elite_classic",
+    "customization": {
+      "schoolName": "STAR PUBLIC SCHOOL",
+      "tagline": "Affiliated to State Board | Affiliation No: 2130894",
+      "address": "Main Road, Bettiah, West Champaran, Bihar - 845438",
+      "phone": "+91 98765 43210",
+      "email": "info@starpublicschool.com",
+      "primaryColor": "#071d3f",
+      "secondaryColor": "#d4af37",
+      "accentColor": "#2563eb",
+      "fontFamily": "Inter, sans-serif",
+      "showQr": true,
+      "showCutLines": true,
+      "principalSignLabel": "Principal Sign",
+      "validTill": "31/03/2027",
+      "academicYear": "2026-2027"
+    },
+    "updatedAt": "2026-10-24T09:27:26.920Z",
+    "updatedBy": "ta2nfeez@gmail.com"
+  },
+  "admit_card": {
+    "category": "admit_card",
+    "activeTemplateId": "admit_card_modern_blue",
+    "customization": {
+      "schoolName": "STAR PUBLIC SCHOOL",
+      "tagline": "Affiliated to State Board | Bettiah, West Champaran",
+      "examName": "ANNUAL EXAMINATION 2026-27",
+      "session": "2026-2027",
+      "centerName": "Star Public School Campus - Examination Hall",
+      "reportingTime": "08:30 AM",
+      "primaryColor": "#0f2b5c",
+      "secondaryColor": "#1e3a8a",
+      "accentColor": "#2563eb",
+      "fontFamily": "Inter, sans-serif",
+      "showTimetable": true,
+      "showInstructions": true,
+      "controllerSignLabel": "Controller of Examinations",
+      "principalSignLabel": "Principal Signature",
+      "instructions": [
+        "Candidates must occupy their seats 15 minutes before exam commencement.",
+        "Admit Card & Student Identity Card are mandatory for hall entry.",
+        "Electronic gadgets, smartwatches, and study notes are strictly forbidden.",
+        "Write your Roll Number & Admission Number legibly on the answer booklet."
+      ]
+    },
+    "updatedAt": "2026-10-24T09:03:04.819Z"
+  },
+  "transfer_certificate": {
+    "category": "transfer_certificate",
+    "activeTemplateId": "tc_traditional_official",
+    "customization": {
+      "schoolName": "STAR PUBLIC SCHOOL",
+      "tagline": "Senior Secondary School | Affiliated to BSEB / CBSE",
+      "affiliationNo": "SPS/BIH/2018/094",
+      "schoolCode": "845438",
+      "bookNo": "04",
+      "prefixNo": "TC/2026/",
+      "primaryColor": "#1e293b",
+      "secondaryColor": "#991b1b",
+      "accentColor": "#d97706",
+      "fontFamily": "serif",
+      "showSeal": true,
+      "showWatermark": true,
+      "preparedByLabel": "Office Clerk",
+      "verifiedByLabel": "Checked By (Incharge)",
+      "principalSignLabel": "Principal (with School Seal)"
+    },
+    "updatedAt": "2026-10-24T09:03:04.819Z"
+  },
+  "marksheet": {
+    "category": "marksheet",
+    "activeTemplateId": "marksheet_bihar_board",
+    "customization": {
+      "boardName": "BIHAR SCHOOL EXAMINATION BOARD / ACADEMIC COUNCIL",
+      "schoolName": "STAR PUBLIC SCHOOL, WEST CHAMPARAN",
+      "tagline": "Affiliated to State Board | Center Code: 845438",
+      "session": "2026-2027",
+      "examName": "ANNUAL EVALUATION & PROGRESS REPORT",
+      "primaryColor": "#0f172a",
+      "secondaryColor": "#1e40af",
+      "accentColor": "#b45309",
+      "fontFamily": "Inter, sans-serif",
+      "showGradingScale": true,
+      "showRemarks": true,
+      "showRank": true,
+      "showAttendance": true,
+      "classTeacherSignLabel": "Class Teacher",
+      "inchargeSignLabel": "Examination Controller",
+      "principalSignLabel": "Headmaster / Principal"
+    },
+    "updatedAt": "2026-10-24T09:03:04.819Z"
+  }
+}
