@@ -1,0 +1,1008 @@
+{
+  "examinations": [
+    {
+      "id": "exam-2026-hy-01",
+      "name": "Half-Yearly Examination 2026-27",
+      "academic_session": "2026-27",
+      "exam_type": "Half-Yearly Examination",
+      "start_date": "2026-10-15",
+      "end_date": "2026-10-25",
+      "applicable_classes": [
+        "Nursery",
+        "LKG",
+        "UKG",
+        "Class 1",
+        "Class 2",
+        "Class 3",
+        "Class 4",
+        "Class 5"
+      ],
+      "description": "Mid-term comprehensive evaluation covering Term 1 syllabus across all subjects.",
+      "status": "ongoing",
+      "result_published": false,
+      "result_published_at": null,
+      "created_by": "Administrator",
+      "created_at": "2026-09-20T00:00:00.000Z",
+      "updated_at": "2026-10-10T00:00:00.000Z"
+    },
+    {
+      "id": "exam-2026-ut1-01",
+      "name": "Unit Test 1 (2026-27)",
+      "academic_session": "2026-27",
+      "exam_type": "Unit Test",
+      "start_date": "2026-07-10",
+      "end_date": "2026-07-16",
+      "applicable_classes": [
+        "Class 1",
+        "Class 2",
+        "Class 3",
+        "Class 4",
+        "Class 5"
+      ],
+      "description": "First unit assessment for foundational literacy and numeracy.",
+      "status": "completed",
+      "result_published": true,
+      "result_published_at": "2026-07-25T00:00:00.000Z",
+      "created_by": "Administrator",
+      "created_at": "2026-06-25T00:00:00.000Z",
+      "updated_at": "2026-07-25T00:00:00.000Z"
+    },
+    {
+      "id": "exam-2026-annual-01",
+      "name": "Annual Examination 2026-27",
+      "academic_session": "2026-27",
+      "exam_type": "Annual Examination",
+      "start_date": "2027-02-20",
+      "end_date": "2027-03-05",
+      "applicable_classes": [
+        "Nursery",
+        "LKG",
+        "UKG",
+        "Class 1",
+        "Class 2",
+        "Class 3",
+        "Class 4",
+        "Class 5"
+      ],
+      "description": "Final academic session culmination and grade promotion examination.",
+      "status": "scheduled",
+      "result_published": false,
+      "result_published_at": null,
+      "created_by": "Administrator",
+      "created_at": "2026-10-01T00:00:00.000Z",
+      "updated_at": "2026-10-01T00:00:00.000Z"
+    }
+  ],
+  "examination_subjects": [
+    {
+      "id": "esub-1792838102612-sub-1",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "English",
+      "subject_code": "ENG",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-2",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "Hindi",
+      "subject_code": "HIN",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-3",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "Mathematics",
+      "subject_code": "MATH",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-4",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "Science / EVS",
+      "subject_code": "EVS",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-5",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "Social Studies",
+      "subject_code": "SST",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-6",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "Computer Science",
+      "subject_code": "COMP",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 50,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 50,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-7",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "General Knowledge",
+      "subject_code": "GK",
+      "max_marks": 70,
+      "pass_marks": 23,
+      "theory_marks": 50,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    },
+    {
+      "id": "esub-1792838102612-sub-8",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "subject_name": "Art & Craft",
+      "subject_code": "ART",
+      "max_marks": 70,
+      "pass_marks": 23,
+      "theory_marks": 50,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-24T10:35:02.612Z"
+    }
+  ],
+  "examination_timetables": [
+    {
+      "id": "tt-hy-c1-01",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "section": "All",
+      "subject_name": "English",
+      "exam_date": "2026-10-15",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Bring HB pencils and coloring set for section B.",
+      "status": "published",
+      "created_at": "2026-10-01T00:00:00.000Z",
+      "updated_at": "2026-10-01T00:00:00.000Z"
+    },
+    {
+      "id": "tt-hy-c1-02",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "section": "All",
+      "subject_name": "Mathematics",
+      "exam_date": "2026-10-17",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Rulers and geometric tools permitted.",
+      "status": "published",
+      "created_at": "2026-10-01T00:00:00.000Z",
+      "updated_at": "2026-10-01T00:00:00.000Z"
+    },
+    {
+      "id": "tt-hy-c1-03",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "section": "All",
+      "subject_name": "Hindi",
+      "exam_date": "2026-10-19",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Oral assessment will be conducted immediately following written paper.",
+      "status": "published",
+      "created_at": "2026-10-01T00:00:00.000Z",
+      "updated_at": "2026-10-01T00:00:00.000Z"
+    },
+    {
+      "id": "tt-hy-c1-04",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 1",
+      "section": "All",
+      "subject_name": "EVS",
+      "exam_date": "2026-10-21",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Environmental Science comprehensive paper.",
+      "status": "published",
+      "created_at": "2026-10-01T00:00:00.000Z",
+      "updated_at": "2026-10-01T00:00:00.000Z"
+    }
+  ],
+  "examination_marks": [
+    {
+      "id": "mark-1792838118990-0-y0u6",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-001",
+      "student_name": "Aarav Sharma",
+      "roll_no": "1",
+      "class_name": "Class 1",
+      "section": "A",
+      "subject_name": "English",
+      "marks_obtained": 48,
+      "max_marks": 100,
+      "attendance_status": "present",
+      "status": "submitted",
+      "remarks": "",
+      "submitted_by": "admin@starpublicschool.com",
+      "submitted_at": "2026-10-24T10:42:07.500Z",
+      "updated_at": "2026-10-24T10:42:07.500Z"
+    },
+    {
+      "id": "mark-1792838118990-1-q2qj",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-002",
+      "student_name": "Ananya Patel",
+      "roll_no": "2",
+      "class_name": "Class 1",
+      "section": "A",
+      "subject_name": "English",
+      "marks_obtained": 42,
+      "max_marks": 100,
+      "attendance_status": "present",
+      "status": "submitted",
+      "remarks": "",
+      "submitted_by": "admin@starpublicschool.com",
+      "submitted_at": "2026-10-24T10:42:07.500Z",
+      "updated_at": "2026-10-24T10:42:07.500Z"
+    },
+    {
+      "id": "mark-1792838118990-2-pjmm",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-003",
+      "student_name": "Rohan Verma",
+      "roll_no": "3",
+      "class_name": "Class 1",
+      "section": "A",
+      "subject_name": "English",
+      "marks_obtained": null,
+      "max_marks": 100,
+      "attendance_status": "absent",
+      "status": "submitted",
+      "remarks": "",
+      "submitted_by": "admin@starpublicschool.com",
+      "submitted_at": "2026-10-24T10:42:07.500Z",
+      "updated_at": "2026-10-24T10:42:07.500Z"
+    }
+  ],
+  "examination_results": [
+    {
+      "id": "res-1792838146183-3qqr",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-001",
+      "student_name": "Aarav Sharma",
+      "roll_no": "1",
+      "class_name": "Class 1",
+      "section": "A",
+      "total_obtained": 48,
+      "total_max": 740,
+      "percentage": 6.49,
+      "grade": "F",
+      "result_status": "failed",
+      "subject_details": [
+        {
+          "subjectName": "English",
+          "subjectCode": "ENG",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": 48,
+          "attendanceStatus": "present",
+          "grade": "C",
+          "isPassed": true
+        },
+        {
+          "subjectName": "Hindi",
+          "subjectCode": "HIN",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Mathematics",
+          "subjectCode": "MATH",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Science / EVS",
+          "subjectCode": "EVS",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Social Studies",
+          "subjectCode": "SST",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Computer Science",
+          "subjectCode": "COMP",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "General Knowledge",
+          "subjectCode": "GK",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Art & Craft",
+          "subjectCode": "ART",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        }
+      ],
+      "remarks": "Needs Improvement",
+      "rank": null,
+      "status": "draft",
+      "calculated_at": "2026-10-24T10:43:02.857Z"
+    },
+    {
+      "id": "res-1792838146183-y8yg",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-002",
+      "student_name": "Ananya Patel",
+      "roll_no": "2",
+      "class_name": "Class 1",
+      "section": "A",
+      "total_obtained": 42,
+      "total_max": 740,
+      "percentage": 5.68,
+      "grade": "F",
+      "result_status": "failed",
+      "subject_details": [
+        {
+          "subjectName": "English",
+          "subjectCode": "ENG",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": 42,
+          "attendanceStatus": "present",
+          "grade": "C",
+          "isPassed": true
+        },
+        {
+          "subjectName": "Hindi",
+          "subjectCode": "HIN",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Mathematics",
+          "subjectCode": "MATH",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Science / EVS",
+          "subjectCode": "EVS",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Social Studies",
+          "subjectCode": "SST",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Computer Science",
+          "subjectCode": "COMP",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "General Knowledge",
+          "subjectCode": "GK",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Art & Craft",
+          "subjectCode": "ART",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        }
+      ],
+      "remarks": "Needs Improvement",
+      "rank": null,
+      "status": "draft",
+      "calculated_at": "2026-10-24T10:43:02.857Z"
+    },
+    {
+      "id": "res-1792838146183-brqv",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-003",
+      "student_name": "Rohan Verma",
+      "roll_no": "3",
+      "class_name": "Class 1",
+      "section": "A",
+      "total_obtained": 0,
+      "total_max": 740,
+      "percentage": 0,
+      "grade": "AB",
+      "result_status": "absent",
+      "subject_details": [
+        {
+          "subjectName": "English",
+          "subjectCode": "ENG",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "absent",
+          "grade": "AB",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Hindi",
+          "subjectCode": "HIN",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Mathematics",
+          "subjectCode": "MATH",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Science / EVS",
+          "subjectCode": "EVS",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Social Studies",
+          "subjectCode": "SST",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Computer Science",
+          "subjectCode": "COMP",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "General Knowledge",
+          "subjectCode": "GK",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Art & Craft",
+          "subjectCode": "ART",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        }
+      ],
+      "remarks": "Needs Improvement",
+      "rank": null,
+      "status": "draft",
+      "calculated_at": "2026-10-24T10:43:02.857Z"
+    },
+    {
+      "id": "res-1792838146183-fr6f",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-004",
+      "student_name": "Priya Gupta",
+      "roll_no": "4",
+      "class_name": "Class 1",
+      "section": "A",
+      "total_obtained": 0,
+      "total_max": 740,
+      "percentage": 0,
+      "grade": "F",
+      "result_status": "failed",
+      "subject_details": [
+        {
+          "subjectName": "English",
+          "subjectCode": "ENG",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Hindi",
+          "subjectCode": "HIN",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Mathematics",
+          "subjectCode": "MATH",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Science / EVS",
+          "subjectCode": "EVS",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Social Studies",
+          "subjectCode": "SST",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Computer Science",
+          "subjectCode": "COMP",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "General Knowledge",
+          "subjectCode": "GK",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Art & Craft",
+          "subjectCode": "ART",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        }
+      ],
+      "remarks": "Needs Improvement",
+      "rank": null,
+      "status": "draft",
+      "calculated_at": "2026-10-24T10:43:02.857Z"
+    },
+    {
+      "id": "res-1792838146183-qcfl",
+      "examination_id": "exam-2026-hy-01",
+      "student_id": "std-005",
+      "student_name": "Kabir Singh",
+      "roll_no": "5",
+      "class_name": "Class 1",
+      "section": "A",
+      "total_obtained": 0,
+      "total_max": 740,
+      "percentage": 0,
+      "grade": "F",
+      "result_status": "failed",
+      "subject_details": [
+        {
+          "subjectName": "English",
+          "subjectCode": "ENG",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Hindi",
+          "subjectCode": "HIN",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Mathematics",
+          "subjectCode": "MATH",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Science / EVS",
+          "subjectCode": "EVS",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Social Studies",
+          "subjectCode": "SST",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Computer Science",
+          "subjectCode": "COMP",
+          "maxMarks": 100,
+          "passMarks": 33,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "General Knowledge",
+          "subjectCode": "GK",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        },
+        {
+          "subjectName": "Art & Craft",
+          "subjectCode": "ART",
+          "maxMarks": 70,
+          "passMarks": 23,
+          "marksObtained": null,
+          "attendanceStatus": "present",
+          "grade": "F",
+          "isPassed": false
+        }
+      ],
+      "remarks": "Needs Improvement",
+      "rank": null,
+      "status": "draft",
+      "calculated_at": "2026-10-24T10:43:02.857Z"
+    }
+  ],
+  "examination_notices": [
+    {
+      "id": "notice-01",
+      "title": "Half-Yearly Examination 2026-27 Date Sheet Released",
+      "message": "The comprehensive date sheet for Half-Yearly Examination has been published. Parents and students are requested to review arrival and reporting schedules carefully. Reporting time is 08:30 AM sharp.",
+      "examination_id": "exam-2026-hy-01",
+      "target_class": "All",
+      "target_section": "All",
+      "notice_type": "timetable",
+      "status": "published",
+      "published_at": "2026-10-02T00:00:00.000Z",
+      "created_by": "Principal Office",
+      "created_at": "2026-10-02T00:00:00.000Z"
+    },
+    {
+      "id": "notice-02",
+      "title": "Admit Card & ID Card Mandatory in Examination Hall",
+      "message": "All students must carry their authentic School ID Card and Examination Admit Card throughout the examination period. No student will be allowed entry without verification.",
+      "examination_id": "exam-2026-hy-01",
+      "target_class": "All",
+      "target_section": "All",
+      "notice_type": "instructions",
+      "status": "published",
+      "published_at": "2026-10-05T00:00:00.000Z",
+      "created_by": "Examination Controller",
+      "created_at": "2026-10-05T00:00:00.000Z"
+    }
+  ],
+  "examination_audit_logs": [
+    {
+      "id": "log-1792838118991",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:35:18.991Z"
+    },
+    {
+      "id": "log-1792838139937",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:35:39.937Z"
+    },
+    {
+      "id": "log-1792838226607",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:37:06.607Z"
+    },
+    {
+      "id": "log-1792838247710",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:37:27.710Z"
+    },
+    {
+      "id": "log-1792838277823",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:37:57.823Z"
+    },
+    {
+      "id": "log-1792838322074",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:38:42.074Z"
+    },
+    {
+      "id": "log-1792838338944",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "Teacher",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 1
+      },
+      "created_at": "2026-10-24T10:38:58.944Z"
+    },
+    {
+      "id": "log-1792838365146",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:39:25.146Z"
+    },
+    {
+      "id": "log-1792838397709",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:39:57.709Z"
+    },
+    {
+      "id": "log-1792838451061",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:40:51.062Z"
+    },
+    {
+      "id": "log-1792838471448",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:41:11.448Z"
+    },
+    {
+      "id": "log-1792838527501",
+      "examination_id": "exam-2026-hy-01",
+      "action": "MARKS_SUBMITTED_FOR_REVIEW",
+      "performed_by": "admin@starpublicschool.com",
+      "details": {
+        "className": "Class 1",
+        "subjectName": "English",
+        "count": 3
+      },
+      "created_at": "2026-10-24T10:42:07.501Z"
+    }
+  ]
+}

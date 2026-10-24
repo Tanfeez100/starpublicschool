@@ -1,7 +1,7 @@
 {
   "id_card": {
     "category": "id_card",
-    "activeTemplateId": "id_card_elite_classic",
+    "activeTemplateId": "id_card_modern_blue",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
       "tagline": "Affiliated to State Board | Affiliation No: 2130894",
@@ -18,12 +18,12 @@
       "validTill": "31/03/2027",
       "academicYear": "2026-2027"
     },
-    "updatedAt": "2026-10-24T09:27:26.920Z",
+    "updatedAt": "2026-10-24T10:37:37.207Z",
     "updatedBy": "ta2nfeez@gmail.com"
   },
   "admit_card": {
     "category": "admit_card",
-    "activeTemplateId": "admit_card_modern_blue",
+    "activeTemplateId": "admit_card_formal_govt",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
       "tagline": "Affiliated to State Board | Bettiah, West Champaran",
@@ -46,7 +46,8 @@
         "Write your Roll Number & Admission Number legibly on the answer booklet."
       ]
     },
-    "updatedAt": "2026-10-24T09:03:04.819Z"
+    "updatedAt": "2026-10-24T10:31:40.209Z",
+    "updatedBy": "ta2nfeez@gmail.com"
   },
   "transfer_certificate": {
     "category": "transfer_certificate",
@@ -68,7 +69,8 @@
       "verifiedByLabel": "Checked By (Incharge)",
       "principalSignLabel": "Principal (with School Seal)"
     },
-    "updatedAt": "2026-10-24T09:03:04.819Z"
+    "updatedAt": "2026-10-24T10:31:53.181Z",
+    "updatedBy": "ta2nfeez@gmail.com"
   },
   "marksheet": {
     "category": "marksheet",
@@ -79,8 +81,8 @@
       "tagline": "Affiliated to State Board | Center Code: 845438",
       "session": "2026-2027",
       "examName": "ANNUAL EVALUATION & PROGRESS REPORT",
-      "primaryColor": "#0f172a",
-      "secondaryColor": "#1e40af",
+      "primaryColor": "#1a5cf4",
+      "secondaryColor": "#58ae1e",
       "accentColor": "#b45309",
       "fontFamily": "Inter, sans-serif",
       "showGradingScale": true,
@@ -91,6 +93,7 @@
       "inchargeSignLabel": "Examination Controller",
       "principalSignLabel": "Headmaster / Principal"
     },
-    "updatedAt": "2026-10-24T09:03:04.819Z"
+    "updatedAt": "2026-10-24T10:32:05.985Z",
+    "updatedBy": "ta2nfeez@gmail.com"
   }
 }
