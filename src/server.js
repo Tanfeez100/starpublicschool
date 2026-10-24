@@ -19,6 +19,7 @@ import studentAuthRoutes from "./routes/student-auth.routes.js";
 import studentLeaveRoutes from "./routes/student-leaves.routes.js";
 import studentNotificationsRoutes from "./routes/student-notifications.routes.js";
 import studentFeesRoutes from "./routes/student-fees.routes.js";
+import documentTemplatesRoutes from "./routes/documentTemplates.routes.js";
 import { initAutoMonthCloseCron } from "./services/autoMonthClose.cron.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
@@ -68,6 +69,9 @@ app.use("/api/student-leaves", studentLeaveRoutes);
 
 // MEGA Image Storage Routes
 app.use("/api/mega", megaRoutes);
+
+// Document Management & Template Routes
+app.use("/api/document-templates", documentTemplatesRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
