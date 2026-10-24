@@ -410,7 +410,7 @@ router.post("/login", async (req, res) => {
     const resolvedEmail = await resolveTeacherEmailForLogin(identity);
 
     // ⚡ OPTIMIZATION: Add retry logic for network resilience
-    const { data, error } = await retryWithBackoff(() => 
+    const { data, error } = await retryWithBackoff(() =>
       supabaseAuth.auth.signInWithPassword({ email: resolvedEmail, password })
     );
 
@@ -426,8 +426,8 @@ router.post("/login", async (req, res) => {
     // 3️⃣ ALLOW ADMIN AND TEACHER ROLES
     const allowedRoles = ["admin", "teacher"];
     if (!allowedRoles.includes(role)) {
-      return res.status(403).json({ 
-        message: "Access denied. Only admin and teacher can login." 
+      return res.status(403).json({
+        message: "Access denied. Only admin and teacher can login."
       });
     }
 
@@ -459,7 +459,7 @@ router.post("/login", async (req, res) => {
       access_token: appAccessToken,
       refresh_token: data.session?.refresh_token || "",
     };
-    
+
     res.json({
       message: "Login successful",
       access_token: appAccessToken,
@@ -483,9 +483,9 @@ router.post("/login", async (req, res) => {
 
   } catch (err) {
     console.error("Login error:", err);
-    res.status(err.status || 503).json({ 
+    res.status(err.status || 503).json({
       message: err.message || "Service temporarily unavailable. Please try again.",
-      error: err.message 
+      error: err.message
     });
   }
 });
@@ -687,24 +687,24 @@ const saveTeacherAssignment = async (req, res) => {
     const hasExistingAssignment = Array.isArray(existingAssignment) && existingAssignment.length > 0;
     const assignmentQuery = hasExistingAssignment
       ? supabase
-          .from("teacher_assignments")
-          .update(assignmentPayload)
-          .eq("teacher_id", teacherId)
-          .eq("class", assignedClass)
-          .eq("section", assignedSection)
-          .eq("academic_year", academicYear)
-          .select("teacher_id, class, section, academic_year, created_at, updated_at")
-          .single()
+        .from("teacher_assignments")
+        .update(assignmentPayload)
+        .eq("teacher_id", teacherId)
+        .eq("class", assignedClass)
+        .eq("section", assignedSection)
+        .eq("academic_year", academicYear)
+        .select("teacher_id, class, section, academic_year, created_at, updated_at")
+        .single()
       : supabase
-          .from("teacher_assignments")
-          .insert([
-            {
-              teacher_id: teacherId,
-              ...assignmentPayload,
-            },
-          ])
-          .select("teacher_id, class, section, academic_year, created_at, updated_at")
-          .single();
+        .from("teacher_assignments")
+        .insert([
+          {
+            teacher_id: teacherId,
+            ...assignmentPayload,
+          },
+        ])
+        .select("teacher_id, class, section, academic_year, created_at, updated_at")
+        .single();
 
     const { data: assignment, error } = await assignmentQuery;
 
@@ -808,8 +808,8 @@ router.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({ 
-        message: "Email is required" 
+      return res.status(400).json({
+        message: "Email is required"
       });
     }
 
@@ -846,21 +846,21 @@ router.post("/reset-password", adminOnly, async (req, res) => {
     const { email, newPassword } = req.body;
 
     if (!email || !newPassword) {
-      return res.status(400).json({ 
-        message: "Email and new password are required" 
+      return res.status(400).json({
+        message: "Email and new password are required"
       });
     }
 
     if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        message: "Password must be at least 6 characters" 
+      return res.status(400).json({
+        message: "Password must be at least 6 characters"
       });
     }
 
     // ⚡ OPTIMIZATION: Modified approach - use admin API directly with email
     // Note: Supabase admin API provides updateUserByEmail method if available
     // Otherwise, we need to add a backend endpoint that requires full admin authentication
-    
+
     // For now, return a note that admin must use Supabase Dashboard or provide user ID
     return res.status(400).json({
       message: "Please provide user ID instead of email for direct password reset",
@@ -869,9 +869,9 @@ router.post("/reset-password", adminOnly, async (req, res) => {
 
   } catch (err) {
     console.error("Reset password error:", err);
-    res.status(503).json({ 
+    res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
-      error: err.message 
+      error: err.message
     });
   }
 });
@@ -885,14 +885,14 @@ router.patch("/reset-password/:id", adminOnly, async (req, res) => {
     const { newPassword } = req.body;
 
     if (!id || !newPassword) {
-      return res.status(400).json({ 
-        message: "User ID and new password are required" 
+      return res.status(400).json({
+        message: "User ID and new password are required"
       });
     }
 
     if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        message: "Password must be at least 6 characters" 
+      return res.status(400).json({
+        message: "Password must be at least 6 characters"
       });
     }
 
@@ -906,13 +906,13 @@ router.patch("/reset-password/:id", adminOnly, async (req, res) => {
     if (updateError) {
       console.error("Reset password error:", updateError);
       if (updateError.status === 404) {
-        return res.status(404).json({ 
-          message: "User not found" 
+        return res.status(404).json({
+          message: "User not found"
         });
       }
-      return res.status(503).json({ 
+      return res.status(503).json({
         message: "Failed to reset password. Please try again.",
-        error: updateError.message 
+        error: updateError.message
       });
     }
 
@@ -923,7 +923,7 @@ router.patch("/reset-password/:id", adminOnly, async (req, res) => {
 
   } catch (err) {
     console.error("Reset password error:", err);
-    res.status(503).json({ 
+    res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
       error: err.message
     });
@@ -965,9 +965,9 @@ router.get("/users", adminOnly, async (req, res) => {
       .select("user_id, role");
 
     if (roleError) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         message: "Failed to fetch users. Please try again.",
-        error: roleError.message 
+        error: roleError.message
       });
     }
 
@@ -987,9 +987,9 @@ router.get("/users", adminOnly, async (req, res) => {
 
   } catch (err) {
     console.error("Get users error:", err);
-    res.status(503).json({ 
+    res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
-      error: err.message 
+      error: err.message
     });
   }
 });
@@ -1003,8 +1003,8 @@ router.post("/logout", async (req, res) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ 
-        message: "Authentication required. Please provide a valid token." 
+      return res.status(401).json({
+        message: "Authentication required. Please provide a valid token."
       });
     }
 
@@ -1049,9 +1049,9 @@ router.post("/logout", async (req, res) => {
 
   } catch (err) {
     console.error("Logout error:", err);
-    res.status(503).json({ 
+    res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
-      error: err.message 
+      error: err.message
     });
   }
 });
@@ -1070,26 +1070,26 @@ router.post("/refresh", async (req, res) => {
     // If no refresh_token in body, try to get from Authorization header
     if (!token && authHeader && authHeader.startsWith("Bearer ")) {
       const accessToken = authHeader.split(" ")[1];
-      
+
       // Get user session to extract refresh token
       const { data: { user }, error: userError } = await supabaseAuth.auth.getUser(accessToken);
-      
+
       if (userError || !user) {
-        return res.status(401).json({ 
-          message: "Login expired. Please login again." 
+        return res.status(401).json({
+          message: "Login expired. Please login again."
         });
       }
 
       // Note: Supabase refresh requires the full session object
       // This is a simplified version - frontend should handle refresh with session
-      return res.status(400).json({ 
-        message: "Please provide refresh_token in request body. Use the refresh_token from login response." 
+      return res.status(400).json({
+        message: "Please provide refresh_token in request body. Use the refresh_token from login response."
       });
     }
 
     if (!token) {
-      return res.status(400).json({ 
-        message: "Refresh token is required" 
+      return res.status(400).json({
+        message: "Refresh token is required"
       });
     }
 
@@ -1099,9 +1099,9 @@ router.post("/refresh", async (req, res) => {
     });
 
     if (error) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         message: "Login expired. Please login again.",
-        error: error.message 
+        error: error.message
       });
     }
 
@@ -1116,8 +1116,8 @@ router.post("/refresh", async (req, res) => {
       .single();
 
     if (roleError || !roleData) {
-      return res.status(403).json({ 
-        message: "Role not assigned" 
+      return res.status(403).json({
+        message: "Role not assigned"
       });
     }
     const assignments =
@@ -1166,9 +1166,9 @@ router.post("/refresh", async (req, res) => {
 
   } catch (err) {
     console.error("Refresh token error:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       message: "Server error",
-      error: err.message 
+      error: err.message
     });
   }
 });

@@ -95,11 +95,11 @@ export const getRoleCached = async (userId) => {
 export const verifyToken = async (token, retryFn) => {
   try {
     const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
-    
+
     if (error || !user) {
       return { valid: false, error: error?.message || "User not found" };
     }
-    
+
     return { valid: true, user };
   } catch (err) {
     return { valid: false, error: err.message };

@@ -78,6 +78,151 @@ const resolveCurrentStudentForPayment = async ({
 };
 
 /**
+ * Core engine to close a month - calculates unpaid balances, updates fee bills, and creates previous dues.
+ * Safe to be executed by both Admin API and automated CRON scheduler.
+ * @param {string} month - Month in "YYYY-MM" format (e.g., "2026-10")
+ * @param {string|null} closedBy - UUID of the user closing the month, or null for system
+ */
+export const executeMonthClosure = async (month, closedBy = null) => {
+  if (!month) throw new Error("month is required");
+
+  const monthRegex = /^\d{4}-\d{2}$/;
+  if (!monthRegex.test(month)) {
+    throw new Error("Invalid month format. Use YYYY-MM (e.g., 2026-10)");
+  }
+
+  const year = parseInt(month.split("-")[0], 10);
+
+  // Check if month is already recorded as closed
+  const { data: existingClosure } = await supabase
+    .from('month_closures')
+    .select('id, month, year, closed_at')
+    .eq('month', month)
+    .maybeSingle();
+
+  if (existingClosure) {
+    return {
+      alreadyClosed: true,
+      message: `Month ${month} has already been closed.`,
+      closure: existingClosure,
+      createdDues: 0,
+      updatedBills: 0
+    };
+  }
+
+  // Attempt to record month closure first (prevents race-conditions / duplicate dues)
+  const { data: insertedClosure, error: closureErr } = await supabase
+    .from('month_closures')
+    .insert({ month, year, closed_by: closedBy || null })
+    .select()
+    .maybeSingle();
+
+  if (closureErr) {
+    // If month already closed - return a friendly flag
+    if ((closureErr.code || '').toString().startsWith('23505') || (closureErr.message || '').toLowerCase().includes('duplicate')) {
+      return {
+        alreadyClosed: true,
+        message: `Month ${month} has already been closed.`,
+        createdDues: 0,
+        updatedBills: 0
+      };
+    }
+    console.error('Failed to insert month_closure:', closureErr);
+    throw closureErr;
+  }
+
+  // Fetch all bills for the month (source-of-truth)
+  const { data: bills, error: billsErr } = await supabase
+    .from("fee_bills")
+    .select("id, student_id, total_amount, bill_status")
+    .eq("month", month);
+
+  if (billsErr) {
+    console.error("Error fetching fee_bills for month:", month, billsErr);
+  }
+
+  if (!bills || bills.length === 0) {
+    return {
+      success: true,
+      alreadyClosed: false,
+      message: `Month ${month} closed. (No bills found for this month)`,
+      createdDues: 0,
+      updatedBills: 0,
+      closure: insertedClosure
+    };
+  }
+
+  let createdDues = 0;
+  let updatedBills = 0;
+
+  for (const bill of bills) {
+    // sum payments for this bill
+    const { data: payments } = await supabase
+      .from('fee_payments')
+      .select('amount_paid')
+      .eq('bill_id', bill.id);
+
+    const totalPaid = (payments && payments.length)
+      ? payments.reduce((s, p) => s + parseFloat(p.amount_paid || 0), 0)
+      : 0;
+
+    const remaining = Math.max(0, parseFloat(bill.total_amount || 0) - totalPaid);
+
+    // If there's an unpaid remaining amount, create/update previous_dues (idempotent)
+    if (remaining > 0) {
+      const { data: existingDue } = await supabase
+        .from('previous_dues')
+        .select('id')
+        .eq('student_id', bill.student_id)
+        .eq('month', month)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingDue) {
+        await supabase
+          .from('previous_dues')
+          .update({ original_due: remaining, remaining_due: remaining, status: 'pending', cleared: false })
+          .eq('id', existingDue.id);
+      } else {
+        await supabase
+          .from('previous_dues')
+          .insert({
+            student_id: bill.student_id,
+            original_due: remaining,
+            remaining_due: remaining,
+            from_month: month,
+            month,
+            year,
+            status: 'pending',
+            cleared: false
+          });
+        createdDues++;
+      }
+    }
+
+    // Do NOT apply advances during month-close. Advances are only applied at payment time.
+    const netPayable = Math.max(0, remaining);
+    const status = remaining === 0 ? 'paid' : (totalPaid > 0 ? 'partial' : 'unpaid');
+
+    await supabase
+      .from('fee_bills')
+      .update({ net_payable: netPayable, bill_status: status })
+      .eq('id', bill.id);
+
+    updatedBills++;
+  }
+
+  return {
+    success: true,
+    alreadyClosed: false,
+    message: `Month ${month} closed successfully. ${createdDues} dues created, ${updatedBills} bills updated.`,
+    createdDues,
+    updatedBills,
+    closure: insertedClosure
+  };
+};
+
+/**
  * Close a month - handle dues for unpaid fees
  * POST /api/fees/close-month
  * Body: { month: "YYYY-MM" }
@@ -89,95 +234,63 @@ export const closeMonth = async (req, res) => {
     if (!month) return res.status(400).json({ message: "month is required" });
 
     const monthRegex = /^\d{4}-\d{2}$/;
-    if (!monthRegex.test(month)) return res.status(400).json({ message: "Invalid month format. Use YYYY-MM (e.g., 2024-01)" });
+    if (!monthRegex.test(month)) return res.status(400).json({ message: "Invalid month format. Use YYYY-MM (e.g., 2026-10)" });
 
-    const year = parseInt(month.split("-")[0], 10);
+    const result = await executeMonthClosure(month, req.user?.id || null);
 
-    // Attempt to record month closure first (prevents race-conditions / duplicate dues)
-    const { data: insertedClosure, error: closureErr } = await supabase
-      .from('month_closures')
-      .insert({ month, year, closed_by: req.user?.id })
-      .select()
-      .maybeSingle();
-
-    if (closureErr) {
-      // If month already closed - return a friendly error
-      if ((closureErr.code || '').toString().startsWith('23505') || (closureErr.message || '').toLowerCase().includes('duplicate')) {
-        return res.status(400).json({ message: `Month ${month} has already been closed` });
-      }
-      console.error('Failed to insert month_closure:', closureErr);
-      return res.status(500).json({ message: 'Failed to close month', detail: closureErr.message });
+    if (result.alreadyClosed) {
+      return res.status(400).json({ message: result.message });
     }
 
-    // Fetch all bills for the month (source-of-truth)
-    const { data: bills } = await supabase
-      .from("fee_bills")
-      .select("id, student_id, total_amount, bill_status")
-      .eq("month", month);
-
-    if (!bills || bills.length === 0) {
-      return res.json({ message: `No bills found for month ${month}` });
-    }
-
-    let createdDues = 0;
-    let updatedBills = 0;
-
-    for (const bill of bills) {
-      // sum payments for this bill
-      const { data: payments } = await supabase
-        .from('fee_payments')
-        .select('amount_paid')
-        .eq('bill_id', bill.id);
-
-      const totalPaid = (payments && payments.length)
-        ? payments.reduce((s, p) => s + parseFloat(p.amount_paid || 0), 0)
-        : 0;
-
-      const remaining = Math.max(0, parseFloat(bill.total_amount || 0) - totalPaid);
-
-      // If there's an unpaid remaining amount, create/update previous_dues (idempotent)
-      if (remaining > 0) {
-        const { data: existingDue } = await supabase
-          .from('previous_dues')
-          .select('id')
-          .eq('student_id', bill.student_id)
-          .eq('month', month)
-          .limit(1)
-          .single();
-
-        if (existingDue) {
-          await supabase
-            .from('previous_dues')
-            .update({ original_due: remaining, remaining_due: remaining, status: 'pending', cleared: false })
-            .eq('id', existingDue.id);
-        } else {
-          await supabase
-            .from('previous_dues')
-            .insert({ student_id: bill.student_id, original_due: remaining, remaining_due: remaining, from_month: month, month, year, status: 'pending', cleared: false });
-          createdDues++;
-        }
-      }
-
-      // Do NOT apply advances during month-close. Advances are only applied at payment time.
-      const netPayable = Math.max(0, remaining);
-
-      const status = remaining === 0 ? 'paid' : (totalPaid > 0 ? 'partial' : 'unpaid');
-
-      await supabase
-        .from('fee_bills')
-        .update({ net_payable: netPayable, bill_status: status })
-        .eq('id', bill.id);
-
-      updatedBills++;
-    }
-
-    // Month closure was recorded at the start of this operation to avoid races (see earlier insertion)
-    // (DB-level fine trigger will already have run on that insert)
-
-    res.json({ message: `Month ${month} closed. ${createdDues} dues created, ${updatedBills} bills updated.` });
+    return res.json({
+      message: result.message,
+      createdDues: result.createdDues,
+      updatedBills: result.updatedBills,
+      closure: result.closure
+    });
   } catch (error) {
     console.error("Error closing month:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
+    if ((error.code || '').toString().startsWith('23505') || (error.message || '').toLowerCase().includes('duplicate')) {
+      return res.status(400).json({ message: `Month ${req.body?.month} has already been closed` });
+    }
+    return res.status(500).json({ message: "Failed to close month", error: error.message });
+  }
+};
+
+/**
+ * Get Month Closure Status & Auto-Close Schedule info
+ * GET /api/fees/closure-status?month=YYYY-MM
+ */
+export const getMonthClosureStatus = async (req, res) => {
+  try {
+    const now = new Date();
+    const istString = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const istDate = new Date(istString);
+    const yyyy = istDate.getFullYear();
+    const mm = String(istDate.getMonth() + 1).padStart(2, "0");
+    const defaultMonth = `${yyyy}-${mm}`;
+
+    const month = req.query.month || defaultMonth;
+
+    const { data: closure } = await supabase
+      .from('month_closures')
+      .select('id, month, year, closed_at, closed_by')
+      .eq('month', month)
+      .maybeSingle();
+
+    return res.json({
+      success: true,
+      month,
+      isClosed: !!closure,
+      closure: closure || null,
+      autoCloseSchedule: {
+        pattern: "Last day of every month at 6:00 PM IST (18:00)",
+        status: "ACTIVE",
+        timezone: "Asia/Kolkata"
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
 

@@ -293,10 +293,10 @@ export const createBillsForClass = async (className, month, section = null, opti
           migrationStudentData
             ? 0 // Migration month: no fees, only migrated pending due
             : tuition +
-              (include_exam_fee ? exam : 0) +
-              (include_annual_fee ? annual : 0) +
-              (include_computer_fee ? computer : 0) +
-              transport;
+            (include_exam_fee ? exam : 0) +
+            (include_annual_fee ? annual : 0) +
+            (include_computer_fee ? computer : 0) +
+            transport;
 
         const totalAmount = baseFee + previousDue;
 
@@ -392,8 +392,8 @@ export const createBillsForClass = async (className, month, section = null, opti
           finalNetPayable === 0
             ? "paid"
             : finalNetPayable < totalAmount
-            ? "partial"
-            : "unpaid";
+              ? "partial"
+              : "unpaid";
 
         await supabaseAdmin
           .from("fee_bills")
@@ -408,18 +408,18 @@ export const createBillsForClass = async (className, month, section = null, opti
 
         const standardizedItems = migrationStudentData
           ? [
-              // Migration month: ONLY show migrated pending due
-              { fee_name: "Previous Due", amount: previousDue },
-            ]
+            // Migration month: ONLY show migrated pending due
+            { fee_name: "Previous Due", amount: previousDue },
+          ]
           : [
-              // Regular months: Show all fees
-              { fee_name: "Tuition Fee", amount: tuition },
-              { fee_name: "Exam Fee", amount: include_exam_fee ? exam : 0 },
-              { fee_name: "Annual Fee", amount: include_annual_fee ? annual : 0 },
-              { fee_name: "Computer Fee", amount: include_computer_fee ? computer : 0 },
-              { fee_name: "Transport Fee", amount: transport },
-              { fee_name: "Previous Due", amount: previousDue },
-            ];
+            // Regular months: Show all fees
+            { fee_name: "Tuition Fee", amount: tuition },
+            { fee_name: "Exam Fee", amount: include_exam_fee ? exam : 0 },
+            { fee_name: "Annual Fee", amount: include_annual_fee ? annual : 0 },
+            { fee_name: "Computer Fee", amount: include_computer_fee ? computer : 0 },
+            { fee_name: "Transport Fee", amount: transport },
+            { fee_name: "Previous Due", amount: previousDue },
+          ];
 
         await supabaseAdmin.from("fee_bill_items").insert(
           standardizedItems.map((item) => ({

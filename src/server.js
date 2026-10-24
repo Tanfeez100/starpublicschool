@@ -19,6 +19,7 @@ import studentAuthRoutes from "./routes/student-auth.routes.js";
 import studentLeaveRoutes from "./routes/student-leaves.routes.js";
 import studentNotificationsRoutes from "./routes/student-notifications.routes.js";
 import studentFeesRoutes from "./routes/student-fees.routes.js";
+import { initAutoMonthCloseCron } from "./services/autoMonthClose.cron.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
 console.log(
@@ -71,4 +72,6 @@ app.use("/api/mega", megaRoutes);
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
+  // Initialize Auto-Close Month Scheduler (Runs on month-end at 6:00 PM IST)
+  initAutoMonthCloseCron();
 });
