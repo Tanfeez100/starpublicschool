@@ -6,6 +6,7 @@ import {
   getFeeList,
   payFee,
   getInvoice,
+  getFeeDashboardOverview,
 } from "../controllers/fees.controller.js";
 import {
   getAutoCloseCronStatus,
@@ -14,6 +15,13 @@ import {
 import { adminOnly, adminOrTeacher } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
+
+/**
+ * GET /api/fees/dashboard
+ * Real fee collection dashboard KPIs, recent transactions, class realization, defaulters
+ * Admin or Teacher
+ */
+router.get("/dashboard", adminOrTeacher, getFeeDashboardOverview);
 
 /**
  * GET /api/fees/closure-status?month=YYYY-MM

@@ -8,18 +8,46 @@ export const calculatePreviousDue = async (studentId, month) => {
   try {
     const { data: duesRows, error } = await supabase
       .from('previous_dues')
-      .select('remaining_due')
+      .select('id, remaining_due, status, cleared, from_month, to_month')
       .eq('student_id', studentId)
-      .eq('status', 'pending')
       .eq('cleared', false)
-      .lt('month', month);
+      .gt('remaining_due', 0);
 
-    if (error || !duesRows || duesRows.length === 0) return 0;
+    if (!error && duesRows && duesRows.length > 0) {
+      const rolledForThisMonth = duesRows.filter((d) => d.to_month === month);
+      const pendingBeforeThisMonth = duesRows.filter((d) => d.status === 'pending' && (d.from_month || d.month) < month);
 
-    return duesRows.reduce(
-      (sum, row) => sum + parseFloat(row.remaining_due || 0),
-      0
-    );
+      if (rolledForThisMonth.length > 0) {
+        return rolledForThisMonth.reduce((s, r) => s + parseFloat(r.remaining_due || 0), 0);
+      }
+      if (pendingBeforeThisMonth.length > 0) {
+        return pendingBeforeThisMonth.reduce((s, r) => s + parseFloat(r.remaining_due || 0), 0);
+      }
+    }
+
+    // Fallback: check fee_bills
+    const { data: prevBills } = await supabase
+      .from('fee_bills')
+      .select('id, month, total_amount, net_payable, bill_status')
+      .eq('student_id', studentId)
+      .lt('month', month)
+      .order('month', { ascending: false });
+
+    if (prevBills && prevBills.length > 0) {
+      const lastBill = prevBills[0];
+      if (lastBill.bill_status !== 'paid') {
+        const { data: payments } = await supabase
+          .from('fee_payments')
+          .select('amount_paid')
+          .eq('bill_id', lastBill.id);
+
+        const paid = (payments || []).reduce((sum, p) => sum + parseFloat(p.amount_paid || 0), 0);
+        const remaining = Math.max(0, parseFloat(lastBill.total_amount || 0) - paid);
+        if (remaining > 0) return remaining;
+      }
+    }
+
+    return 0;
   } catch (err) {
     console.error('calculatePreviousDue error:', err);
     return 0;

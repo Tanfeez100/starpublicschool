@@ -86,12 +86,13 @@ export const getMyFeeDashboard = async (req, res) => {
             .eq("status", "used")
             .in("used_for_bill_id", billIds)
         : Promise.resolve({ data: [], error: null }),
-      supabase
-        .from("fee_payments")
-        .select("id, bill_id, amount_paid, payment_mode, payment_date, created_at")
-        .gte("payment_date", `${year}-01-01`)
-        .lte("payment_date", `${year}-12-31`)
-        .order("payment_date", { ascending: false }),
+      billIds.length
+        ? supabase
+            .from("fee_payments")
+            .select("id, bill_id, amount_paid, payment_mode, payment_date, created_at")
+            .in("bill_id", billIds) // BUG FIX: was querying by date range with no student_id filter — fetched all school payments!
+            .order("payment_date", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ]);
 
     const itemError = itemsResult?.error || null;
@@ -128,10 +129,12 @@ export const getMyFeeDashboard = async (req, res) => {
     const history = (bills || []).map((bill) => {
       const items = itemsByBill[bill.id] || [];
       const payments = paymentsByBill[bill.id] || [];
-      const advanceUsed = advanceByBill[bill.id] || 0;
-      const basePayable = toNumber(bill.net_payable ?? bill.total_amount);
-      const totalPaid = sumAmounts(payments, "amount_paid") + advanceUsed;
-      const remaining = Math.max(0, basePayable - totalPaid);
+      const directPayments = payments.filter((p) => p.payment_mode !== "advance");
+      const advanceFromPayments = sumAmounts(payments.filter((p) => p.payment_mode === "advance"), "amount_paid");
+      const advanceUsed = Math.max(advanceByBill[bill.id] || 0, advanceFromPayments);
+      const totalAmount = toNumber(bill.total_amount);
+      const totalPaid = sumAmounts(directPayments, "amount_paid") + advanceUsed;
+      const remaining = Math.max(0, totalAmount - totalPaid);
       const latestPayment = getLatestPayment(payments);
 
       return {
@@ -139,9 +142,9 @@ export const getMyFeeDashboard = async (req, res) => {
         invoice_number: `INV-${bill.id.substring(0, 8).toUpperCase()}`,
         month: bill.month,
         year: bill.year,
-        bill_status: bill.bill_status || "unpaid",
-        total_amount: toNumber(bill.total_amount),
-        net_payable: basePayable,
+        bill_status: remaining === 0 ? "paid" : totalPaid > 0 ? "partial" : (bill.bill_status || "unpaid"),
+        total_amount: totalAmount,
+        net_payable: remaining,
         paid_amount: totalPaid,
         remaining,
         advance_used: advanceUsed,

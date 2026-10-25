@@ -127,11 +127,13 @@ export const loadBillNotificationContext = async (billId) => {
 
   const payments = await fetchBillPaymentsByBillIds([id]);
 
-  const totalPaid = payments?.reduce((sum, payment) => sum + Number.parseFloat(payment.amount_paid || 0), 0) || 0;
-  const advanceUsed = advanceUsedRows?.reduce((sum, row) => sum + Number.parseFloat(row.amount || 0), 0) || 0;
+  const directPaid = payments?.filter(p => p.payment_mode !== 'advance').reduce((sum, payment) => sum + Number.parseFloat(payment.amount_paid || 0), 0) || 0;
+  const advanceFromPayments = payments?.filter(p => p.payment_mode === 'advance').reduce((sum, payment) => sum + Number.parseFloat(payment.amount_paid || 0), 0) || 0;
+  const advanceFromLedger = advanceUsedRows?.reduce((sum, row) => sum + Number.parseFloat(row.amount || 0), 0) || 0;
+  const advanceUsed = Math.max(advanceFromLedger, advanceFromPayments);
   const activeAdvanceBalance = activeAdvanceRows?.reduce((sum, row) => sum + Number.parseFloat(row.amount || 0), 0) || 0;
   const totalAmount = Number.parseFloat(bill.total_amount || 0);
-  const totalPaidIncludingAdvance = totalPaid + advanceUsed;
+  const totalPaidIncludingAdvance = directPaid + advanceUsed;
   const remaining = Math.max(0, totalAmount - totalPaidIncludingAdvance);
 
   return {

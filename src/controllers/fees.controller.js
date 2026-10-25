@@ -397,8 +397,9 @@ export const getFeeList = async (req, res) => {
 
     let billQuery = supabase
       .from("fee_bills")
-      .select("id, student_id, month, total_amount, bill_status")
-      .in("student_id", studentIds);
+      .select("id, student_id, month, total_amount, bill_status, created_at")
+      .in("student_id", studentIds)
+      .order("month", { ascending: false });
 
     if (month) {
       billQuery = billQuery.eq("month", month);
@@ -432,7 +433,7 @@ export const getFeeList = async (req, res) => {
     =============================== */
     // ✅ CRITICAL: Fetch current student statuses to filter out inactive students
     const billStudentIds = [...new Set((bills || []).map(b => b.student_id))];
-    
+
     const { data: currentStudents, error: statusErr } = await supabase
       .from("students")
       .select("id, status")
@@ -473,18 +474,34 @@ export const getFeeList = async (req, res) => {
 
     const activeBillIds = activeBills.map((b) => b.id);
 
-    const billsByStudent = {};
-    activeBills.forEach((b) => {
-      billsByStudent[b.student_id] = b;
+    const studentMap = {};
+    students.forEach((s) => {
+      studentMap[s.id] = s;
+    });
+
+    // Sort activeBills by month DESC, then student class, section, roll_no
+    activeBills.sort((a, b) => {
+      const mCmp = (b.month || "").localeCompare(a.month || "");
+      if (mCmp !== 0) return mCmp;
+      const sA = studentMap[a.student_id];
+      const sB = studentMap[b.student_id];
+      const cCmp = (sA?.class || "").localeCompare(sB?.class || "", undefined, { numeric: true });
+      if (cCmp !== 0) return cCmp;
+      const secCmp = (sA?.section || "").localeCompare(sB?.section || "");
+      if (secCmp !== 0) return secCmp;
+      const rA = parseInt(sA?.roll_no || 0, 10);
+      const rB = parseInt(sB?.roll_no || 0, 10);
+      return rA - rB;
     });
 
     /* ===============================
-       5️⃣ FETCH BILL ITEMS + PAYMENTS (ONLY FOR ACTIVE BILLS)
+       5️⃣ FETCH BILL ITEMS, PAYMENTS & ADVANCES (ONLY FOR ACTIVE BILLS)
     =============================== */
 
     const [
       { data: billItems, error: itemErr },
       { data: payments, error: payErr },
+      { data: usedAdvances, error: advErr },
     ] = await Promise.all([
       supabase
         .from("fee_bill_items")
@@ -493,14 +510,20 @@ export const getFeeList = async (req, res) => {
 
       supabase
         .from("fee_payments")
-        .select("bill_id, amount_paid")
+        .select("bill_id, amount_paid, payment_mode")
         .in("bill_id", activeBillIds), // ✅ Only fetch payments for active bills
+
+      supabase
+        .from("advance_ledger")
+        .select("used_for_bill_id, amount")
+        .eq("status", "used")
+        .in("used_for_bill_id", activeBillIds),
     ]);
 
-    if (itemErr || payErr) {
+    if (itemErr || payErr || advErr) {
       return res.status(500).json({
         message: "Failed to fetch bill details",
-        error: itemErr?.message || payErr?.message,
+        error: itemErr?.message || payErr?.message || advErr?.message,
       });
     }
 
@@ -514,71 +537,115 @@ export const getFeeList = async (req, res) => {
       itemsByBill[item.bill_id].push(item);
     });
 
-    const paidByBill = {};
+    const advanceLedgerByBill = {};
+    usedAdvances?.forEach((adv) => {
+      if (adv.used_for_bill_id) {
+        advanceLedgerByBill[adv.used_for_bill_id] =
+          (advanceLedgerByBill[adv.used_for_bill_id] || 0) + parseFloat(adv.amount || 0);
+      }
+    });
+
+    const directPaidByBill = {};
+    const advancePaidByBill = {};
+    const paymentModesByBill = {};
+
     payments?.forEach((p) => {
-      paidByBill[p.bill_id] =
-        (paidByBill[p.bill_id] || 0) + parseFloat(p.amount_paid || 0);
+      const amt = parseFloat(p.amount_paid || 0);
+      const mode = (p.payment_mode || "").toLowerCase();
+
+      if (mode && mode !== "dues_adjustment") {
+        if (!paymentModesByBill[p.bill_id]) paymentModesByBill[p.bill_id] = [];
+        paymentModesByBill[p.bill_id].push(mode);
+      }
+
+      if (mode === "advance") {
+        advancePaidByBill[p.bill_id] = (advancePaidByBill[p.bill_id] || 0) + amt;
+      } else {
+        directPaidByBill[p.bill_id] = (directPaidByBill[p.bill_id] || 0) + amt;
+      }
     });
 
     /* ===============================
-       6️⃣ FINAL RESPONSE BUILD (ONLY ACTIVE STUDENTS)
+       6️⃣ FINAL RESPONSE BUILD (ACCURATE TO EACH MONTH'S BILL)
     =============================== */
 
-    const result = students
-      .filter(student => {
-        // ✅ CRITICAL: Only include if student has an active bill
-        // This ensures we only show students who are active AND have bills
-        return billsByStudent[student.id] !== undefined;
-      })
-      .map((student) => {
-        const bill = billsByStudent[student.id];
+    const result = activeBills
+      .map((bill) => {
+        const student = studentMap[bill.student_id];
+        if (!student) return null;
 
-        if (!bill) return null; // month filter case
+        const items = itemsByBill[bill.id] || [];
+        const directPaid = directPaidByBill[bill.id] || 0;
+        const advancePaid = Math.max(advancePaidByBill[bill.id] || 0, advanceLedgerByBill[bill.id] || 0);
+        const totalPaid = directPaid + advancePaid;
 
-      const items = itemsByBill[bill.id] || [];
-      const totalPaid = paidByBill[bill.id] || 0;
+        const breakdown = {
+          tuition_fee: 0,
+          exam_fee: 0,
+          annual_fee: 0,
+          computer_fee: 0,
+          transport_fee: 0,
+          previous_due: 0,
+        };
 
-      const breakdown = {
-        tuition_fee: 0,
-        exam_fee: 0,
-        annual_fee: 0,
-        computer_fee: 0,
-        transport_fee: 0,
-        previous_due: 0,
-      };
+        items.forEach((item) => {
+          const name = (item.fee_name || "").toLowerCase();
+          const amt = parseFloat(item.amount || 0);
 
-      items.forEach((item) => {
-        const name = (item.fee_name || "").toLowerCase();
-        const amt = parseFloat(item.amount || 0);
+          if (name.includes("tuition")) breakdown.tuition_fee += amt;
+          else if (name.includes("exam")) breakdown.exam_fee += amt;
+          else if (name.includes("annual")) breakdown.annual_fee += amt;
+          else if (name.includes("computer")) breakdown.computer_fee += amt;
+          else if (name.includes("transport")) breakdown.transport_fee += amt;
+          else if (name.includes("previous")) breakdown.previous_due += amt;
+        });
 
-        if (name.includes("tuition")) breakdown.tuition_fee += amt;
-        else if (name.includes("exam")) breakdown.exam_fee += amt;
-        else if (name.includes("annual")) breakdown.annual_fee += amt;
-        else if (name.includes("computer")) breakdown.computer_fee += amt;
-        else if (name.includes("transport")) breakdown.transport_fee += amt;
-        else if (name.includes("previous")) breakdown.previous_due += amt;
-      });
+        // Calculate total_fee from breakdown instead of bill.total_amount
+        const totalFee = breakdown.tuition_fee + breakdown.exam_fee + breakdown.annual_fee + breakdown.computer_fee + breakdown.transport_fee + breakdown.previous_due;
+        const isBillPaid = totalPaid >= totalFee && totalFee > 0
+          ? true
+          : bill.bill_status === "paid"
+            ? true
+            : false;
+        const netPayable = isBillPaid ? 0 : Math.max(0, totalFee - totalPaid);
+        const billStatus = isBillPaid ? "paid" : (totalPaid > 0 && netPayable > 0 ? "partial" : (bill.bill_status === "partial" ? "partial" : "unpaid"));
+        const duesSettledViaNext = (isBillPaid && totalPaid < totalFee) ? (totalFee - totalPaid) : 0;
+        const advanceGenerated = Math.max(0, directPaid - totalFee);
+        const amountSettled = Math.min(totalFee, totalPaid) + duesSettledViaNext;
+        const displayPaid = isBillPaid ? Math.max(totalPaid, amountSettled) : totalPaid;
 
-      // Calculate total_fee from breakdown instead of bill.total_amount
-      const totalFee = breakdown.tuition_fee + breakdown.exam_fee + breakdown.annual_fee + breakdown.computer_fee + breakdown.transport_fee + breakdown.previous_due;
-      const netPayable = Math.max(0, totalFee - totalPaid);
+        const rawModes = [...new Set(paymentModesByBill[bill.id] || [])];
+        let primaryMode = "--";
+        if (rawModes.length > 0) {
+          primaryMode = rawModes.map(m => m.charAt(0).toUpperCase() + m.slice(1)).join(", ");
+        } else if (advancePaid > 0) {
+          primaryMode = "Advance";
+        } else if (isBillPaid) {
+          primaryMode = duesSettledViaNext > 0 ? "Settled in Next Bill" : "Cash";
+        }
 
-      return {
-        student_id: student.id,
-        student_name: student.name,
-        father_name: student.father_name,
-        roll_no: student.roll_no,
-        class: student.class,
-        section: student.section,
-        bill_id: bill.id,
-        month: bill.month,
-        bill_status: bill.bill_status,
-        ...breakdown,
-        total_fee: totalFee,
-        total_paid: totalPaid,
-        net_payable: parseFloat(netPayable.toFixed(2)),
-      };
-    }).filter(Boolean);
+        return {
+          student_id: student.id,
+          student_name: student.name,
+          father_name: student.father_name,
+          roll_no: student.roll_no,
+          class: student.class,
+          section: student.section,
+          bill_id: bill.id,
+          month: bill.month,
+          bill_status: billStatus,
+          ...breakdown,
+          total_fee: totalFee,
+          total_paid: displayPaid,
+          direct_paid: directPaid,
+          amount_settled: amountSettled,
+          advance_used: advancePaid,
+          advance_generated: advanceGenerated,
+          dues_settled: duesSettledViaNext,
+          net_payable: parseFloat(netPayable.toFixed(2)),
+          payment_mode: primaryMode,
+        };
+      }).filter(Boolean);
 
     /* ===============================
        7️⃣ SUCCESS RESPONSE
@@ -623,7 +690,7 @@ export const payFee = async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const allowedModes = ['cash','upi','online','cheque','bank_transfer','advance','advance_adjustment','dues_adjustment','adjustment'];
+    const allowedModes = ['cash', 'upi', 'online', 'cheque', 'bank_transfer', 'advance', 'advance_adjustment', 'dues_adjustment', 'adjustment'];
     if (!allowedModes.includes(String(payment_mode).toLowerCase())) {
       return res.status(400).json({ message: `invalid payment_mode. allowed: ${allowedModes.join(',')}` });
     }
@@ -690,7 +757,7 @@ export const payFee = async (req, res) => {
       const transactionId = result?.transaction_id || req.body.transaction_id || null;
 
       await sendStudentPushNotification({
-        studentId,
+        studentId: student_id,  // BUG FIX: was `studentId` (undefined), must be `student_id`
         title: `Fee payment recorded for ${billContext.month}`,
         body: `${billContext.student?.name || "Student"} | Paid Rs. ${amountPaid.toFixed(2)} via ${paymentModeLabel || "PAYMENT"} | Remaining Rs. ${remaining.toFixed(2)}`,
         notificationType: "fee_payment",
@@ -715,6 +782,82 @@ export const payFee = async (req, res) => {
       });
     } catch (notificationError) {
       console.error("Fee payment notification failed:", notificationError);
+    }
+
+    // 3.1) If this bill contains Previous Due, settle previous_dues and past bills
+    try {
+      const { data: billItems } = await supabase
+        .from("fee_bill_items")
+        .select("fee_name, amount")
+        .eq("bill_id", bill.id);
+
+      const prevDueItem = (billItems || []).find((i) =>
+        (i.fee_name || "").toLowerCase().includes("previous")
+      );
+      const prevDueAmount = parseFloat(prevDueItem?.amount || 0);
+
+      const { data: currentPayments } = await supabase
+        .from("fee_payments")
+        .select("amount_paid")
+        .eq("bill_id", bill.id);
+
+      const totalPaidOnBill = (currentPayments || []).reduce(
+        (sum, p) => sum + parseFloat(p.amount_paid || 0),
+        0
+      );
+
+      if (prevDueAmount > 0 && totalPaidOnBill > 0) {
+        // Mark rolled previous_dues for this student as cleared
+        await supabase
+          .from("previous_dues")
+          .update({
+            cleared: true,
+            status: "cleared",
+            remaining_due: 0,
+            remaining_dues: 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("student_id", student_id)
+          .eq("cleared", false)
+          .lte("month", month);
+
+        // Mark previous bills (month < bill.month) for this student as paid
+        const { data: prevBills } = await supabase
+          .from("fee_bills")
+          .select("id, month, year, total_amount, net_payable")
+          .eq("student_id", student_id)
+          .lt("month", month)
+          .neq("bill_status", "paid");
+
+        if (prevBills?.length) {
+          for (const prevBill of prevBills) {
+            const remainingOnPrev = parseFloat(prevBill.net_payable ?? prevBill.total_amount ?? 0);
+            await supabase
+              .from("fee_bills")
+              .update({
+                net_payable: 0,
+                bill_status: "paid",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", prevBill.id);
+
+            if (remainingOnPrev > 0) {
+              await supabase.from("fee_payments").insert({
+                student_id: student_id,
+                bill_id: prevBill.id,
+                amount_paid: remainingOnPrev,
+                payment_mode: "dues_adjustment",
+                payment_date: payment_date || new Date().toISOString().slice(0, 10),
+                month: prevBill.month,
+                year: prevBill.year || parseInt(prevBill.month.split("-")[0], 10),
+                receipt_no: `ADJ-${bill.id.slice(0, 8).toUpperCase()}`,
+              });
+            }
+          }
+        }
+      }
+    } catch (clearErr) {
+      console.error("Error clearing previous dues on bill payment:", clearErr);
     }
 
     // 4) Return canonical response (use DB-returned values)
@@ -795,11 +938,18 @@ export const getInvoice = async (req, res) => {
       });
     }
 
-    const totalPaid =
-      payments?.reduce(
-        (sum, p) => sum + parseFloat(p.amount_paid || 0),
-        0
-      ) || 0;
+    let directPaid = 0;
+    let advanceFromPayments = 0;
+
+    payments?.forEach((p) => {
+      const amt = parseFloat(p.amount_paid || 0);
+      const mode = (p.payment_mode || "").toLowerCase();
+      if (mode === "advance") {
+        advanceFromPayments += amt;
+      } else if (mode !== "dues_adjustment") {
+        directPaid += amt;
+      }
+    });
 
     // 🔹 4️⃣ Fetch advance USED for this bill
     const { data: advanceUsedRows } = await supabase
@@ -808,13 +958,14 @@ export const getInvoice = async (req, res) => {
       .eq("used_for_bill_id", bill_id)
       .eq("status", "used");
 
-    const advanceUsed =
+    const advanceUsedFromLedger =
       advanceUsedRows?.reduce(
         (sum, a) => sum + parseFloat(a.amount || 0),
         0
       ) || 0;
 
-    const totalPaidIncludingAdvance = totalPaid + advanceUsed;
+    const advanceUsed = Math.max(advanceFromPayments, advanceUsedFromLedger);
+    const totalPaidIncludingAdvance = directPaid + advanceUsed;
 
     const remaining = Math.max(
       0,
@@ -850,7 +1001,8 @@ export const getInvoice = async (req, res) => {
 
         summary: {
           total_amount: parseFloat(bill.total_amount || 0),
-          total_paid: totalPaid,
+          direct_paid: directPaid,
+          total_paid: directPaid,
           advance_used: advanceUsed,
           total_paid_including_advance: totalPaidIncludingAdvance,
           remaining: remaining,
@@ -859,8 +1011,8 @@ export const getInvoice = async (req, res) => {
             remaining === 0
               ? "paid"
               : totalPaidIncludingAdvance > 0
-              ? "partial"
-              : "unpaid",
+                ? "partial"
+                : "unpaid",
         },
       },
     });
@@ -887,10 +1039,16 @@ export const generateNextMonthBills = async (req, res) => {
     nextMonth.setMonth(nextMonth.getMonth() + 1);
     const nextMonthStr = nextMonth.toISOString().slice(0, 7);
 
-    // Fetch all students
+    // Fetch ONLY ACTIVE students (BUG FIX: was fetching all students including inactive/left)
     const { data: students } = await supabase
       .from("students")
-      .select("id, class, uses_transport, transport_charge");
+      .select("id, class, uses_transport, transport_charge")
+      .eq("status", "active");
+
+    // BUG FIX: Null guard — students can be null if DB error or empty result
+    if (!students || students.length === 0) {
+      return res.json({ message: `No active students found. No bills generated for ${nextMonthStr}` });
+    }
 
     for (const student of students) {
       // Sum all active advances for the student (support multiple advance_ledger rows)
@@ -904,33 +1062,74 @@ export const generateNextMonthBills = async (req, res) => {
         ? advanceRows.reduce((s, r) => s + parseFloat(r.amount || 0), 0)
         : 0;
 
-      // SUM all pending previous_dues for the student
+      // SUM all pending / rolled uncleared previous_dues for the student
       const { data: duesRows } = await supabase
         .from("previous_dues")
-        .select("remaining_due")
+        .select("id, remaining_due, status, cleared, from_month, to_month")
         .eq("student_id", student.id)
-        .eq("status", "pending")
-        .eq("cleared", false);
+        .eq("cleared", false)
+        .gt("remaining_due", 0);
 
-      const previousDueSum = (duesRows && duesRows.length)
-        ? duesRows.reduce((s, r) => s + parseFloat(r.remaining_due || 0), 0)
-        : 0;
+      const rolledForThisMonth = (duesRows || []).filter(
+        (d) => d.to_month === nextMonthStr
+      );
+      const pendingBeforeThisMonth = (duesRows || []).filter(
+        (d) => d.status === "pending" && (d.from_month || d.month) < nextMonthStr
+      );
+
+      let previousDueSum = 0;
+      if (rolledForThisMonth.length > 0) {
+        previousDueSum = rolledForThisMonth.reduce(
+          (sum, d) => sum + parseFloat(d.remaining_due || 0),
+          0
+        );
+      } else if (pendingBeforeThisMonth.length > 0) {
+        previousDueSum = pendingBeforeThisMonth.reduce(
+          (sum, d) => sum + parseFloat(d.remaining_due || 0),
+          0
+        );
+      } else {
+        const { data: prevBills } = await supabase
+          .from("fee_bills")
+          .select("id, month, total_amount, net_payable, bill_status")
+          .eq("student_id", student.id)
+          .lt("month", nextMonthStr)
+          .order("month", { ascending: false });
+
+        if (prevBills && prevBills.length > 0) {
+          const lastBill = prevBills[0];
+          if (lastBill.bill_status !== "paid") {
+            const { data: payments } = await supabase
+              .from("fee_payments")
+              .select("amount_paid")
+              .eq("bill_id", lastBill.id);
+
+            const paid = (payments || []).reduce(
+              (sum, p) => sum + parseFloat(p.amount_paid || 0),
+              0
+            );
+            const remaining = Math.max(
+              0,
+              parseFloat(lastBill.total_amount || 0) - paid
+            );
+            if (remaining > 0) {
+              previousDueSum = remaining;
+            }
+          }
+        }
+      }
 
       // Compute total fee for the class (use fee_structure if present; fallback to hardcoded example)
       let totalFee = 0;
       try {
         const { data: fsRows } = await supabase
-          .from('fee_structure')
-          .select('tuition_fee, exam_fee, annual_fee, computer_fee, fee_amount, fee_name')
+          .from('fee_structures')  // BUG FIX: was 'fee_structure' (wrong table name)
+          .select('fee_name, fee_amount')
           .eq('class', student.class);
 
         if (fsRows && fsRows.length > 0) {
-          // normalized rows or legacy single-row format
-          if (fsRows[0].tuition_fee !== undefined) {
-            totalFee = fsRows.reduce((s, r) => s + (parseFloat(r.tuition_fee || 0) + parseFloat(r.exam_fee || 0) + parseFloat(r.annual_fee || 0) + parseFloat(r.computer_fee || 0)), 0);
-          } else {
-            totalFee = fsRows.reduce((s, r) => s + (parseFloat(r.fee_amount || 0)), 0);
-          }
+          // normalized rows — sum up all fee_amount values
+          totalFee = fsRows.reduce((s, r) => s + (parseFloat(r.fee_amount || 0)), 0);
         } else {
           // fallback (kept for backward compatibility)
           totalFee = 1000 + 200 + 500 + 300; // tuition + exam + annual + computer
@@ -966,7 +1165,8 @@ export const generateNextMonthBills = async (req, res) => {
           month: nextMonthStr,
           year: parseInt(nextMonthStr.split('-')[0], 10),
           total_amount: parseFloat(grossTotalAmount.toFixed(2)),
-          net_payable: parseFloat(netPayable.toFixed(2))
+          net_payable: parseFloat(grossTotalAmount.toFixed(2)),
+          bill_status: 'unpaid'
         })
         .select()
         .single();
@@ -975,6 +1175,80 @@ export const generateNextMonthBills = async (req, res) => {
         console.error('Failed to create bill for student', student.id, insertErr || 'no data');
         continue;
       }
+
+      // Adjust active advances against this new bill
+      let remainingToAdjust = grossTotalAmount;
+      let totalAdvanceUsed = 0;
+
+      const { data: activeAdvRows } = await supabase
+        .from('advance_ledger')
+        .select('id, amount')
+        .eq('student_id', student.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true });
+
+      if (activeAdvRows?.length) {
+        for (const adv of activeAdvRows) {
+          if (remainingToAdjust <= 0) break;
+
+          const advAmount = parseFloat(adv.amount || 0);
+          const useAmount = Math.min(advAmount, remainingToAdjust);
+
+          totalAdvanceUsed += useAmount;
+          remainingToAdjust -= useAmount;
+
+          if (useAmount === advAmount) {
+            await supabase
+              .from('advance_ledger')
+              .update({
+                status: 'used',
+                used_for_bill_id: insertedBill.id,
+                used_at: new Date().toISOString(),
+              })
+              .eq('id', adv.id);
+          } else {
+            await supabase
+              .from('advance_ledger')
+              .update({
+                amount: advAmount - useAmount,
+                used_for_bill_id: insertedBill.id,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', adv.id);
+          }
+        }
+      }
+
+      if (totalAdvanceUsed > 0) {
+        const [yearPart] = nextMonthStr.split('-');
+        await supabase.from('fee_payments').insert({
+          student_id: student.id,
+          bill_id: insertedBill.id,
+          amount_paid: totalAdvanceUsed,
+          payment_mode: 'advance',
+          payment_date: new Date().toISOString().slice(0, 10),
+          month: nextMonthStr,
+          year: parseInt(yearPart, 10),
+          receipt_no: `ADV-${insertedBill.id.slice(0, 8).toUpperCase()}`,
+        });
+      }
+
+      const finalNetPayable = Math.max(0, grossTotalAmount - totalAdvanceUsed);
+      const finalStatus =
+        finalNetPayable === 0
+          ? 'paid'
+          : totalAdvanceUsed > 0
+            ? 'partial'
+            : 'unpaid';
+
+      await supabase
+        .from('fee_bills')
+        .update({
+          net_payable: parseFloat(finalNetPayable.toFixed(2)),
+          bill_status: finalStatus,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', insertedBill.id);
 
       if (previousDueSum > 0) {
         await supabase
@@ -1161,4 +1435,304 @@ export const recordPayment = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+/**
+ * GET /api/fees/dashboard
+ * Returns real overview data for fee dashboard:
+ * - KPIs: Total collected, collected this month, pending dues, pending students count, payment modes
+ * - Recent transactions
+ * - Class-wise fee realization
+ * - Defaulters list
+ */
+export const getFeeDashboardOverview = async (req, res) => {
+  try {
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    // 1. Fetch all fee payments (joined with fee_bills and students)
+    const { data: payments, error: payErr } = await supabase
+      .from("fee_payments")
+      .select(`
+        id,
+        amount_paid,
+        payment_mode,
+        payment_date,
+        receipt_no,
+        transaction_id,
+        created_at,
+        bill_id,
+        student_id,
+        fee_bills (
+          id,
+          month,
+          receipt_number,
+          bill_status,
+          total_amount,
+          net_payable,
+          students (
+            id,
+            name,
+            class,
+            section,
+            roll_no,
+            status
+          )
+        )
+      `)
+      .order("created_at", { ascending: false });
+
+    if (payErr) {
+      console.error("Dashboard payments query error:", payErr);
+      return res.status(500).json({ message: "Failed to fetch payments", error: payErr.message });
+    }
+
+    // 2. Fetch all fee bills (joined with active students)
+    const { data: bills, error: billErr } = await supabase
+      .from("fee_bills")
+      .select(`
+        id,
+        student_id,
+        month,
+        year,
+        due_date,
+        total_amount,
+        net_payable,
+        bill_status,
+        receipt_number,
+        created_at,
+        students (
+          id,
+          name,
+          class,
+          section,
+          roll_no,
+          status
+        )
+      `)
+      .order("created_at", { ascending: false });
+
+    if (billErr) {
+      console.error("Dashboard bills query error:", billErr);
+      return res.status(500).json({ message: "Failed to fetch bills", error: billErr.message });
+    }
+
+    const allPayments = payments || [];
+    const allBills = bills || [];
+
+    // --- KPI 1: Total Collected ---
+    const totalCollected = allPayments.reduce(
+      (sum, p) => sum + Number(p.amount_paid || 0),
+      0
+    );
+
+    // --- KPI 2: Collected This Month ---
+    const thisMonthPayments = allPayments.filter((p) => {
+      const pDate = p.payment_date || p.created_at || "";
+      return pDate.startsWith(currentMonthKey);
+    });
+    const collectedThisMonth = thisMonthPayments.reduce(
+      (sum, p) => sum + Number(p.amount_paid || 0),
+      0
+    );
+    const transactionsCountThisMonth = thisMonthPayments.length;
+
+    // --- Group bills by student_id to find the latest bill per student ---
+    // Previous dues are rolled into the next month's bill, so each student's current
+    // outstanding due is strictly their latest bill's net_payable (adjusted for any payments).
+    const studentLatestBillMap = new Map();
+    const sortedBills = [...allBills].sort((a, b) => {
+      const cmp = String(b.month || '').localeCompare(String(a.month || ''));
+      if (cmp !== 0) return cmp;
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+
+    sortedBills.forEach((b) => {
+      if (!studentLatestBillMap.has(b.student_id)) {
+        studentLatestBillMap.set(b.student_id, b);
+      }
+    });
+
+    // --- KPI 3: Real Pending Dues & Pending Students (Single source of truth) ---
+    let totalPendingDues = 0;
+    const pendingStudentsList = [];
+
+    studentLatestBillMap.forEach((latestBill) => {
+      const due = Number(latestBill.net_payable || 0);
+      if (latestBill.bill_status !== "paid" && due > 0) {
+        totalPendingDues += due;
+        pendingStudentsList.push(latestBill);
+      }
+    });
+    const pendingStudentsCount = pendingStudentsList.length;
+
+    // --- KPI 4: Online vs Cash Ratio ---
+    let cashCount = 0;
+    let onlineCount = 0;
+    allPayments.forEach((p) => {
+      const mode = String(p.payment_mode || "").toLowerCase();
+      if (mode === "cash") {
+        cashCount += 1;
+      } else {
+        onlineCount += 1;
+      }
+    });
+    const totalPaymentsCount = allPayments.length;
+    const onlinePercentage =
+      totalPaymentsCount > 0 ? Math.round((onlineCount / totalPaymentsCount) * 100) : 0;
+    const dominantMode =
+      totalPaymentsCount === 0
+        ? "No collections recorded"
+        : onlineCount >= cashCount
+          ? `${onlinePercentage}% Online`
+          : `${100 - onlinePercentage}% Cash`;
+
+    // --- Recent Transactions (formatted for frontend display) ---
+    const recentTransactions = allPayments.slice(0, 25).map((p) => {
+      const bill = p.fee_bills;
+      const student = bill?.students;
+
+      const studentName = student?.name || "Student";
+      const studentClass = student?.class
+        ? `Class ${student.class}${student.section ? `-${student.section}` : ""}`
+        : "Class --";
+
+      // Format date
+      let dateDisplay = "";
+      if (p.payment_date) {
+        const d = new Date(p.payment_date);
+        dateDisplay = !isNaN(d.getTime())
+          ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+          : p.payment_date;
+      } else if (p.created_at) {
+        const d = new Date(p.created_at);
+        dateDisplay = !isNaN(d.getTime())
+          ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+          : "";
+      }
+
+      const receiptId = p.receipt_no || bill?.receipt_number || `REC-${p.id.slice(0, 8).toUpperCase()}`;
+
+      return {
+        id: receiptId,
+        payment_id: p.id,
+        bill_id: p.bill_id,
+        student: studentName,
+        class: studentClass,
+        roll_no: student?.roll_no || "",
+        amount: `₹${Number(p.amount_paid || 0).toLocaleString("en-IN")}`,
+        amount_raw: Number(p.amount_paid || 0),
+        mode: (p.payment_mode || "Cash").toUpperCase(),
+        date: dateDisplay || "Recent",
+        status: bill?.bill_status === "paid" ? "Paid" : "Partial",
+      };
+    });
+
+    // --- Class-wise Fee Realization (Using latest bill per student to avoid double counting) ---
+    const classMap = {};
+    studentLatestBillMap.forEach((b) => {
+      const student = b.students;
+      const rawClass = student?.class || "Other";
+      const className = `Class ${rawClass}`;
+
+      if (!classMap[className]) {
+        classMap[className] = {
+          name: className,
+          rawClass,
+          total_raw: 0,
+          pending_raw: 0,
+          collected_raw: 0,
+        };
+      }
+
+      const due = b.bill_status === "paid" ? 0 : Number(b.net_payable || 0);
+      classMap[className].pending_raw += due;
+    });
+
+    allPayments.forEach((p) => {
+      const student = p.fee_bills?.students;
+      const rawClass = student?.class || "Other";
+      const className = `Class ${rawClass}`;
+      if (classMap[className]) {
+        classMap[className].collected_raw += Number(p.amount_paid || 0);
+      }
+    });
+
+    const classWiseRealization = Object.values(classMap)
+      .map((item) => {
+        const totalRaw = item.collected_raw + item.pending_raw;
+        const percent = totalRaw > 0 ? Math.round((item.collected_raw / totalRaw) * 100) : 0;
+        return {
+          name: item.name,
+          percent,
+          collected: `₹${item.collected_raw.toLocaleString("en-IN")}`,
+          collected_raw: item.collected_raw,
+          total: `₹${totalRaw.toLocaleString("en-IN")}`,
+          total_raw: totalRaw,
+          pending_raw: item.pending_raw,
+          color:
+            percent >= 80 ? "bg-emerald-500" : percent >= 50 ? "bg-blue-500" : "bg-amber-500",
+        };
+      })
+      .sort((a, b) => b.total_raw - a.total_raw);
+
+    // --- Pending Defaulters Alert (1 entry per student with exact latest balance) ---
+    const today = new Date();
+    const defaulters = pendingStudentsList
+      .sort((a, b) => Number(b.net_payable || 0) - Number(a.net_payable || 0))
+      .slice(0, 20)
+      .map((b) => {
+        const student = b.students;
+        let daysOverdue = 0;
+        if (b.due_date) {
+          const due = new Date(b.due_date);
+          daysOverdue = Math.max(0, Math.floor((today - due) / (1000 * 60 * 60 * 24)));
+        } else if (b.created_at) {
+          const created = new Date(b.created_at);
+          daysOverdue = Math.max(0, Math.floor((today - created) / (1000 * 60 * 60 * 24)));
+        }
+
+        return {
+          bill_id: b.id,
+          student_id: b.student_id,
+          student: student?.name || "Student",
+          class: student?.class
+            ? `Class ${student.class}${student.section ? `-${student.section}` : ""}`
+            : "Class --",
+          roll_no: student?.roll_no || "--",
+          due: `₹${Number(b.net_payable || 0).toLocaleString("en-IN")}`,
+          due_raw: Number(b.net_payable || 0),
+          month: b.month,
+          days_overdue: daysOverdue,
+        };
+      });
+
+    return res.json({
+      success: true,
+      data: {
+        kpis: {
+          total_collected: totalCollected,
+          collected_this_month: collectedThisMonth,
+          transactions_this_month: transactionsCountThisMonth,
+          pending_dues: totalPendingDues,
+          pending_students_count: pendingStudentsCount,
+          total_transactions: totalPaymentsCount,
+          online_percentage: onlinePercentage,
+          cash_percentage: 100 - onlinePercentage,
+          dominant_mode: dominantMode,
+        },
+        recent_transactions: recentTransactions,
+        class_wise_realization: classWiseRealization,
+        defaulters,
+      },
+    });
+  } catch (error) {
+    console.error("Get Fee Dashboard Overview Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching dashboard data",
+      error: error.message,
+    });
+  }
+};
+
 

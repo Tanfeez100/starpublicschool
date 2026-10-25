@@ -87,17 +87,30 @@ export const generateBillsPDF = async (month, className = null) => {
         return { ...bill, dues, advance, net_payable, tuition_fee, exam_fee, annual_fee, computer_fee, transport_fee, previous_due };
       }));
 
-      // Sort fees by class and roll number
+      // Sort fees by class, section and roll number numerically (1, 2, 3...)
       if (enrichedFees && enrichedFees.length > 0) {
         enrichedFees.sort((a, b) => {
           const classA = a.students?.class || "";
           const classB = b.students?.class || "";
           if (classA !== classB) {
-            return classA.localeCompare(classB);
+            const numA = parseInt(String(classA).replace(/\D/g, ""), 10);
+            const numB = parseInt(String(classB).replace(/\D/g, ""), 10);
+            if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+            return classA.localeCompare(classB, undefined, { numeric: true, sensitivity: "base" });
           }
-          const rollA = a.students?.roll_no || "";
-          const rollB = b.students?.roll_no || "";
-          return rollA.localeCompare(rollB);
+
+          const secA = String(a.students?.section || "").trim().toUpperCase();
+          const secB = String(b.students?.section || "").trim().toUpperCase();
+          if (secA !== secB) {
+            return secA.localeCompare(secB, undefined, { numeric: true, sensitivity: "base" });
+          }
+
+          const rollA = parseInt(String(a.students?.roll_no || "").replace(/\D/g, ""), 10);
+          const rollB = parseInt(String(b.students?.roll_no || "").replace(/\D/g, ""), 10);
+          if (!isNaN(rollA) && !isNaN(rollB) && rollA !== rollB) {
+            return rollA - rollB;
+          }
+          return String(a.students?.roll_no || "").localeCompare(String(b.students?.roll_no || ""), undefined, { numeric: true, sensitivity: "base" });
         });
       }
 
@@ -446,14 +459,14 @@ export const generateInvoicePDF = async (invoiceData) => {
         .fill(primary);
 
       doc
-        .fontSize(24)
+        .fontSize(20)
         .font("Helvetica-Bold")
         .fillColor("#ffffff")
-        .text("INVOICE", margin + 20, 62, { align: "left" });
+        .text("FEE PAYMENT RECEIPT", margin + 20, 64, { align: "left" });
 
       // School Details (customize these)
       doc
-        .fontSize(12)
+        .fontSize(11)
         .font("Helvetica")
         .fillColor("#cbd5e1")
         .text("Star Public School", margin + 20, 92)
@@ -461,12 +474,12 @@ export const generateInvoicePDF = async (invoiceData) => {
         .text("(W. Champaran)- 845106", margin + 20, 122)
         .text("Phone: +91 9006457330", margin + 20, 137);
 
-      // Invoice Number and Date (Right aligned)
+      // Receipt Number and Date (Right aligned)
       doc
         .fontSize(10)
         .font("Helvetica")
         .fillColor("#ffffff")
-        .text(`Invoice #: ${invoiceData.invoice_number}`, margin + 20, 78, {
+        .text(`Receipt #: ${invoiceData.invoice_number || invoiceData.bill_id}`, margin + 20, 78, {
           align: "right",
           width: contentWidth - 40,
         })
@@ -633,7 +646,7 @@ export const generateInvoicePDF = async (invoiceData) => {
         .font("Helvetica")
         .fillColor(mutedText)
         .text("Thank you for your payment!", margin, currentY, { align: "center", width: contentWidth })
-        .text("This is a computer-generated invoice.", margin, currentY + 15, {
+        .text("This is an official computer-generated fee receipt.", margin, currentY + 15, {
           align: "center",
           width: contentWidth,
         });
@@ -699,16 +712,29 @@ export const generateBillsPDFForBilling = async (className, month, section = nul
         return;
       }
 
-      // Sort bills by class and roll number
+      // Sort bills by class, section and roll number numerically (1, 2, 3...)
       bills.sort((a, b) => {
         const classA = a.students?.class || "";
         const classB = b.students?.class || "";
         if (classA !== classB) {
-          return classA.localeCompare(classB);
+          const numA = parseInt(String(classA).replace(/\D/g, ""), 10);
+          const numB = parseInt(String(classB).replace(/\D/g, ""), 10);
+          if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+          return classA.localeCompare(classB, undefined, { numeric: true, sensitivity: "base" });
         }
-        const rollA = a.students?.roll_no || "";
-        const rollB = b.students?.roll_no || "";
-        return rollA.localeCompare(rollB);
+
+        const secA = String(a.students?.section || "").trim().toUpperCase();
+        const secB = String(b.students?.section || "").trim().toUpperCase();
+        if (secA !== secB) {
+          return secA.localeCompare(secB, undefined, { numeric: true, sensitivity: "base" });
+        }
+
+        const rollA = parseInt(String(a.students?.roll_no || "").replace(/\D/g, ""), 10);
+        const rollB = parseInt(String(b.students?.roll_no || "").replace(/\D/g, ""), 10);
+        if (!isNaN(rollA) && !isNaN(rollB) && rollA !== rollB) {
+          return rollA - rollB;
+        }
+        return String(a.students?.roll_no || "").localeCompare(String(b.students?.roll_no || ""), undefined, { numeric: true, sensitivity: "base" });
       });
 
       // Get bill items for all bills
