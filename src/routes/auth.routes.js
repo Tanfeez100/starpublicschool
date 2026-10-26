@@ -61,10 +61,13 @@ const buildAppAccessToken = (user = {}, assignments = []) => {
       id: user.id,
       email: user.email || null,
       role: user.role || null,
+      name: user.name || null,
+      fullName: user.fullName || null,
       assignedClass: user.assignedClass || null,
       assignedSection: user.assignedSection || null,
       academicYear: user.academicYear || null,
       assignments,
+      permissions: user.permissions || [],
     },
     jwtSecret,
     { expiresIn: APP_SESSION_TTL_SECONDS }
@@ -443,14 +446,35 @@ router.post("/login", async (req, res) => {
         ? (await getTeacherAssignmentMap([data.user.id])).get(data.user.id) || []
         : [];
     const assignment = assignments[0] || null;
+    const profile =
+      role === "teacher"
+        ? (await getTeacherProfileMap([data.user.id])).get(data.user.id) || null
+        : null;
+
+    const teacherPermissions = [
+      "dashboard",
+      "attendance",
+      "teacher_attendance",
+      "marks_upload",
+      "examinations",
+      "students",
+      "timetable",
+    ];
+
+    const permissions = role === "teacher" ? teacherPermissions : ["*"];
+    const userDisplayName = profile?.full_name || data.user.email?.split("@")[0] || (role === "admin" ? "Principal Sharma" : "Teacher");
+
     const appAccessToken = buildAppAccessToken(
       {
         id: data.user.id,
         email: data.user.email,
         role,
+        name: userDisplayName,
+        fullName: profile?.full_name || "",
         assignedClass: assignment?.class || null,
         assignedSection: assignment?.section || null,
         academicYear: assignment?.academic_year || null,
+        permissions,
       },
       assignments
     );
@@ -468,10 +492,19 @@ router.post("/login", async (req, res) => {
         id: data.user.id,
         email: data.user.email,
         role: role, // Will be "admin" or "teacher"
+        name: userDisplayName,
+        fullName: profile?.full_name || "",
+        employeeId: profile?.employee_id || "",
+        username: profile?.username || "",
+        mobile: profile?.mobile || "",
+        department: profile?.department || "",
+        designation: profile?.designation || "",
+        status: profile?.status || "active",
         assignedClass: assignment?.class || null,
         assignedSection: assignment?.section || null,
         academicYear: assignment?.academic_year || null,
         assignments,
+        permissions,
       },
       session: appSession,
       token_info: {

@@ -1489,8 +1489,9 @@ export const submitMarks = async (req, res) => {
       });
     }
 
-    // Prepare marks records (only for new marks, skip if already exists)
+    // Prepare marks records (insert new, update existing when not locked)
     const markRecords = [];
+    const markUpdates = [];
     const errors = [];
     const skipped = [];
     const duplicateCheckSet = new Set(); // Track subject_ids to prevent duplicates in the same request
@@ -1518,9 +1519,6 @@ export const submitMarks = async (req, res) => {
       }
       const subject_id = subjectRef.id;
 
-      // Check if marks already exist for this subject (from database)
-      const existingMark = existingMarksMap[subject_id];
-      
       // Check if this subject_id is already in the current request (duplicate in same request)
       if (duplicateCheckSet.has(subject_id)) {
         skipped.push({
@@ -1530,24 +1528,38 @@ export const submitMarks = async (req, res) => {
         continue;
       }
 
-      if (existingMark) {
-        // Skip - marks already exist in database, don't update via submit API
-        skipped.push({
-          subject: subject_name || subject_code,
-          message: "Marks already exist for this subject.",
-        });
-      } else {
-        const normalizedMarks = validateAndNormalizeSubjectMarks({
-          subject: subjectRef,
-          external_marks,
-          internal_marks,
-        });
-        if (normalizedMarks.error) {
-          errors.push(normalizedMarks.error);
-          continue;
-        }
+      const normalizedMarks = validateAndNormalizeSubjectMarks({
+        subject: subjectRef,
+        external_marks,
+        internal_marks,
+      });
+      if (normalizedMarks.error) {
+        errors.push(normalizedMarks.error);
+        continue;
+      }
 
-        // Insert new marks only
+      // Check if marks already exist for this subject (from database)
+      const existingMark = existingMarksMap[subject_id];
+
+      if (existingMark) {
+        if (existingMark.status === "LOCKED") {
+          skipped.push({
+            subject: subject_name || subject_code,
+            message: "Marks are locked and cannot be edited.",
+          });
+        } else {
+          // Update existing mark
+          markUpdates.push({
+            id: existingMark.id,
+            external_marks: normalizedMarks.external_marks,
+            internal_marks: normalizedMarks.internal_marks,
+            status: "SUBMITTED",
+            updated_at: new Date().toISOString(),
+          });
+          duplicateCheckSet.add(subject_id);
+        }
+      } else {
+        // Insert new mark
         markRecords.push({
           student_id: student.id,
           subject_id: subject_id,
@@ -1557,24 +1569,42 @@ export const submitMarks = async (req, res) => {
           status: "SUBMITTED",
           _subject_name: subject_name || subject_code, // Track for error messages
         });
-        duplicateCheckSet.add(subject_id); // Track to prevent duplicates in same request
+        duplicateCheckSet.add(subject_id);
       }
     }
 
     if (errors.length > 0) {
       return res.status(400).json({
-        message: "Validation errors",
+        message: errors.join("; "),
         errors,
       });
     }
 
-    // Insert new marks (if any)
-    if (markRecords.length === 0) {
+    if (markRecords.length === 0 && markUpdates.length === 0) {
       return res.status(400).json({
-        message: "No new marks to submit. All marks already exist for this student.",
-        skipped: skipped,
-        note: "Marks already exist for this student.",
+        message: skipped.length > 0 ? skipped[0].message : "No valid marks to submit or update.",
+        skipped,
+        note: "Marks already exist and may be locked, or no marks were entered.",
       });
+    }
+
+    // Process updates
+    if (markUpdates.length > 0) {
+      for (const updateItem of markUpdates) {
+        const { error: updateError } = await supabase
+          .from("marks")
+          .update({
+            external_marks: updateItem.external_marks,
+            internal_marks: updateItem.internal_marks,
+            status: updateItem.status,
+            updated_at: updateItem.updated_at,
+          })
+          .eq("id", updateItem.id);
+
+        if (updateError) {
+          console.error("Update mark error:", updateError);
+        }
+      }
     }
 
     // Insert new marks (if any) - handle duplicate key errors gracefully
@@ -1591,46 +1621,30 @@ export const submitMarks = async (req, res) => {
         
         // Check if it's a duplicate key constraint error
         if (insertError.message && insertError.message.includes("duplicate key") && insertError.message.includes("marks_student_id_subject_id_terminal_key")) {
-          // This means marks were added between our check and insert (race condition)
-          // Re-check which marks actually got inserted and which were duplicates
-          const { data: recheckMarks } = await supabase
-            .from("marks")
-            .select("subject_id")
-            .eq("student_id", student.id)
-            .eq("terminal", terminal)
-            .in("subject_id", markRecords.map(m => m.subject_id));
-
-          const insertedSubjectIds = new Set(recheckMarks?.map(m => m.subject_id) || []);
-          
-          // Find which subjects were actually duplicates
-          const duplicateSubjects = [];
-          markRecords.forEach((record) => {
-            if (insertedSubjectIds.has(record.subject_id)) {
-              // This one was already in DB, it's a duplicate
-              duplicateSubjects.push({
-                subject: record._subject_name,
-                message: "Marks already exist for this subject.",
-              });
-            }
-          });
-          
-
-          return res.status(400).json({
-            message: "Some marks already exist in the database",
-            error: "Duplicate key constraint violation",
-            duplicate_subjects: duplicateSubjects,
-            note: "Marks already exist for some subjects.",
+          // Update instead
+          for (const rec of cleanMarkRecords) {
+            await supabase
+              .from("marks")
+              .update({
+                external_marks: rec.external_marks,
+                internal_marks: rec.internal_marks,
+                status: "SUBMITTED",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("student_id", rec.student_id)
+              .eq("subject_id", rec.subject_id)
+              .eq("terminal", rec.terminal);
+          }
+        } else {
+          return res.status(500).json({ 
+            message: "Failed to save marks",
+            error: insertError.message 
           });
         }
-        
-        return res.status(500).json({ 
-          message: "Failed to save marks",
-          error: insertError.message 
-        });
       }
     }
 
-    if (markRecords.length > 0) {
+    if (markRecords.length > 0 || markUpdates.length > 0) {
       await invalidatePublishedResultForStudentTerminal(student.id, terminal);
     }
 
@@ -1638,7 +1652,7 @@ export const submitMarks = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Marks submitted successfully. ${markRecords.length} new mark(s) added.`,
+      message: `Marks saved successfully. (${markRecords.length} added, ${markUpdates.length} updated).`,
       student: {
         id: student.id,
         name: student.name,
@@ -1648,8 +1662,8 @@ export const submitMarks = async (req, res) => {
       },
       terminal,
       marks_inserted: markRecords.length,
+      marks_updated: markUpdates.length,
       skipped: skipped.length > 0 ? skipped : undefined,
-      note: skipped.length > 0 ? "Some marks were skipped because they already exist." : undefined,
     });
   } catch (err) {
     console.error("Submit marks error:", err);

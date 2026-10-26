@@ -1,0 +1,80 @@
+[
+  {
+    "id": "87077655-c145-4102-a04b-be8cbac8c094",
+    "name": "Hindi",
+    "code": "HIN",
+    "created_at": "2026-02-20T14:03:30.624371"
+  },
+  {
+    "id": "b38aaa31-144c-4f77-b978-a9c426d23fea",
+    "name": "Hindi Writing",
+    "code": "HINW",
+    "created_at": "2026-02-20T14:03:54.933325"
+  },
+  {
+    "id": "1e8f8e26-2410-4e31-af5c-d781eeb329b3",
+    "name": "English",
+    "code": "ENG",
+    "created_at": "2026-02-20T14:04:12.120782"
+  },
+  {
+    "id": "7b2d4a53-78ee-4dfd-a2a0-e63f16e434c3",
+    "name": "English Writing",
+    "code": "ENGW",
+    "created_at": "2026-02-20T14:04:27.919148"
+  },
+  {
+    "id": "44a33ef8-bf23-4d46-ad61-55f7577e3334",
+    "name": "Math",
+    "code": "MTH",
+    "created_at": "2026-02-20T14:04:51.196181"
+  },
+  {
+    "id": "75801916-7d92-46ea-8d65-acff326d3d42",
+    "name": "Drawing",
+    "code": "DR",
+    "created_at": "2026-02-20T14:05:01.052906"
+  },
+  {
+    "id": "51f3423d-61d6-4c18-95e7-253726b1999c",
+    "name": "EVS",
+    "code": "EVS",
+    "created_at": "2026-02-20T14:05:19.70811"
+  },
+  {
+    "id": "427584c8-fe61-4b1a-9773-e6e441d74fc0",
+    "name": "GK",
+    "code": "GK",
+    "created_at": "2026-02-20T14:05:28.92996"
+  },
+  {
+    "id": "7061a050-f6e0-4d4f-a61d-8e3291f6b989",
+    "name": "Computer",
+    "code": "COMP",
+    "created_at": "2026-02-20T14:06:11.95578"
+  },
+  {
+    "id": "dda70930-9411-48c2-9502-cf4b3a8fdf23",
+    "name": "Science",
+    "code": "SC",
+    "created_at": "2026-02-20T14:06:50.754548"
+  },
+  {
+    "id": "f9df317d-c39c-46c1-a337-50028969f831",
+    "name": "Urdu/Sanskrit",
+    "code": "US",
+    "created_at": "2026-02-20T16:03:20.484649"
+  },
+  {
+    "id": "a86b5ba9-bbf9-4323-85bc-ab0d360e95eb",
+    "name": "URDU",
+    "code": "URD",
+    "created_at": "2026-06-28T02:20:23.67122"
+  },
+  {
+    "id": "0baf08c7-bb55-4bb2-bf82-ca7d9236f4ee",
+    "name": "SST",
+    "code": "SST",
+    "created_at": "2026-10-24T11:58:02.862796"
+  }
+]

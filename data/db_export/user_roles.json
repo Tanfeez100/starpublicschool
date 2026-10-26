@@ -1,0 +1,42 @@
+[
+  {
+    "user_id": "c3b891a9-06c3-4741-a0b4-4026dbe7b2db",
+    "role": "admin"
+  },
+  {
+    "user_id": "06e49c8e-4ee9-4741-8d5d-a9bfcd59627e",
+    "role": "admin"
+  },
+  {
+    "user_id": "c5e0b007-7791-42c3-b281-b6616b91badf",
+    "role": "admin"
+  },
+  {
+    "user_id": "fd74c020-d610-428e-885e-500317cf6b18",
+    "role": "admin"
+  },
+  {
+    "user_id": "ae77c382-9665-4124-872b-5f5a1467a75d",
+    "role": "admin"
+  },
+  {
+    "user_id": "f24fb96a-0142-4859-8d2f-64b503eddab2",
+    "role": "admin"
+  },
+  {
+    "user_id": "4cc6e818-5dec-4707-8675-ef71bc2f13ca",
+    "role": "teacher"
+  },
+  {
+    "user_id": "fb527135-0215-4871-adbd-a55d1ddf218b",
+    "role": "teacher"
+  },
+  {
+    "user_id": "d8ee2bf4-2f96-4997-8c52-d2ed2d30a2f0",
+    "role": "teacher"
+  },
+  {
+    "user_id": "6c7b0957-4e8c-4a4d-949a-edd34b97bd49",
+    "role": "teacher"
+  }
+]

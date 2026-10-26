@@ -49,11 +49,13 @@ export const authenticate = async (req, res, next) => {
             class: decoded.class || null,
             section: decoded.section || null,
             name: decoded.name || null,
+            fullName: decoded.fullName || null,
             rollNo: decoded.rollNo || decoded.roll_no || null,
             assignedClass: decoded.assignedClass || null,
             assignedSection: decoded.assignedSection || null,
             academicYear: decoded.academicYear || null,
             assignments: Array.isArray(decoded.assignments) ? decoded.assignments : [],
+            permissions: Array.isArray(decoded.permissions) ? decoded.permissions : [],
           };
           return next();
         }

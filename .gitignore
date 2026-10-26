@@ -44,3 +44,12 @@ postman_collections/*.json
 
 migrations/*.sql
  docs_migrations/TEACHER_GPS_ATTENDANCE_MODULE.sql
+ data/
+ scripts/
+  data/db_export/
+  data/timetable_data.json
+  docs_migrations/MASTER_DATABASE_SCHEMA_DICTIONARY.md
+  scripts/migrate-direct.js
+  scripts/test-timetable.js
+  data/document_templates.json
+  data/examinations_data.json

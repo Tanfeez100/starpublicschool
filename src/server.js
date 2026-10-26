@@ -21,6 +21,7 @@ import studentNotificationsRoutes from "./routes/student-notifications.routes.js
 import studentFeesRoutes from "./routes/student-fees.routes.js";
 import documentTemplatesRoutes from "./routes/documentTemplates.routes.js";
 import examinationRoutes from "./routes/examinations.routes.js";
+import timetableRoutes from "./routes/timetable.routes.js";
 import { initAutoMonthCloseCron } from "./services/autoMonthClose.cron.js";
 
 console.log("ENV URL:", process.env.SUPABASE_URL);
@@ -76,6 +77,9 @@ app.use("/api/document-templates", documentTemplatesRoutes);
 
 // Examination Management Suite Routes
 app.use("/api/examinations", examinationRoutes);
+
+// Timetable & Period Scheduling Management Routes
+app.use("/api/timetable", timetableRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

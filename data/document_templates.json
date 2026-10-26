@@ -1,7 +1,7 @@
 {
   "id_card": {
     "category": "id_card",
-    "activeTemplateId": "id_card_modern_blue",
+    "activeTemplateId": "id_card_modern_tech",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
       "tagline": "Affiliated to State Board | Affiliation No: 2130894",
@@ -18,7 +18,7 @@
       "validTill": "31/03/2027",
       "academicYear": "2026-2027"
     },
-    "updatedAt": "2026-10-24T10:37:37.207Z",
+    "updatedAt": "2026-10-26T08:01:20.905Z",
     "updatedBy": "ta2nfeez@gmail.com"
   },
   "admit_card": {

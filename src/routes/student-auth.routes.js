@@ -18,13 +18,78 @@ const normalizeDateOnly = (value) => {
   const input = normalizeCredential(value);
   if (!input) return "";
 
+  // 1. Check DD-MM-YYYY or DD/MM/YYYY
+  const dmy = input.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (dmy) {
+    const d = dmy[1].padStart(2, "0");
+    const m = dmy[2].padStart(2, "0");
+    const y = dmy[3];
+    return `${y}-${m}-${d}`;
+  }
+
+  // 2. Check YYYY-MM-DD or YYYY/MM/DD
+  const ymd = input.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (ymd) {
+    const y = ymd[1];
+    const m = ymd[2].padStart(2, "0");
+    const d = ymd[3].padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
   const parsed = new Date(input);
   if (Number.isNaN(parsed.getTime())) return "";
 
   return parsed.toISOString().split("T")[0];
 };
 
-const isDateCredential = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim());
+const isDateCredential = (value) => Boolean(normalizeDateOnly(value));
+
+const checkDefaultPasswordMatch = (student, credential) => {
+  if (!student || !credential) return false;
+  const rawInput = String(credential).trim();
+  const lowerInput = rawInput.toLowerCase();
+
+  const studentDob = normalizeDateOnly(student.date_of_birth);
+  const birthYear = studentDob ? studentDob.split("-")[0] : "";
+
+  // 1. Direct DOB match (e.g. "2010-01-01", "01-01-2010", "01/01/2010")
+  const normalizedInputDob = normalizeDateOnly(rawInput);
+  if (studentDob && normalizedInputDob && normalizedInputDob === studentDob) {
+    return true;
+  }
+
+  if (birthYear) {
+    const rawName = String(student.name || "").trim();
+    const lettersOnly = rawName.replace(/[^a-zA-Z]/g, "");
+    const firstWordLetters = (rawName.split(/\s+/)[0] || "").replace(/[^a-zA-Z]/g, "");
+
+    // 2. Name starting 4 letters + birth year (e.g. "Tanf2010", "Stud2010")
+    if (lettersOnly.length >= 2) {
+      const fourLettersYear = `${lettersOnly.slice(0, 4).toLowerCase()}${birthYear}`;
+      if (lowerInput === fourLettersYear) return true;
+    }
+
+    // 3. Full first name + birth year (e.g. "Tanfeez2010", "Student2010")
+    if (firstWordLetters) {
+      const firstNameYear = `${firstWordLetters.toLowerCase()}${birthYear}`;
+      if (lowerInput === firstNameYear) return true;
+    }
+
+    // 4. Clean name (full letters) + birth year
+    if (lettersOnly) {
+      const fullLettersYear = `${lettersOnly.toLowerCase()}${birthYear}`;
+      if (lowerInput === fullLettersYear) return true;
+    }
+
+    // 5. Username + birth year
+    if (student.username) {
+      const usernameYear = `${String(student.username).toLowerCase()}${birthYear}`;
+      if (lowerInput === usernameYear) return true;
+    }
+  }
+
+  return false;
+};
 
 const studentPayload = (student) => ({
   id: student.id,
@@ -132,11 +197,12 @@ router.post("/login", async (req, res) => {
       });
     }
 
+    const cleanUsername = String(username).trim();
     const { data: student, error: studentError } = await isActiveStudentQuery(
       supabase
         .from("students")
         .select(studentSelect)
-        .eq("username", String(username).trim())
+        .ilike("username", cleanUsername)
     ).maybeSingle();
 
     if (studentError || !student) {
@@ -154,7 +220,7 @@ router.post("/login", async (req, res) => {
     const { data: authRow, error: authError } = await supabase
       .from("student_auth")
       .select("student_id, username, password_hash, is_active")
-      .eq("username", String(username).trim())
+      .eq("student_id", student.id)
       .eq("is_active", true)
       .maybeSingle();
 
@@ -166,8 +232,10 @@ router.post("/login", async (req, res) => {
     let firstLogin = false;
     let mustResetPassword = false;
 
+    const isDefaultMatch = checkDefaultPasswordMatch(student, loginCredential);
+
     if (!authRecord) {
-      if (!isDateCredential(loginCredential) || loginCredential !== studentDob) {
+      if (!isDefaultMatch) {
         return res.status(401).json({ success: false, message: "Invalid username or password." });
       }
 
@@ -182,11 +250,19 @@ router.post("/login", async (req, res) => {
       firstLogin = true;
       mustResetPassword = true;
     } else {
-      const credentialMatchesHash = await bcrypt.compare(loginCredential, authRecord.password_hash || "");
+      let credentialMatchesHash = await bcrypt.compare(loginCredential, authRecord.password_hash || "");
+
+      // If direct hash comparison fails, check if student is logging in with default Name+Year or DOB
+      if (!credentialMatchesHash && isDefaultMatch) {
+        credentialMatchesHash = true;
+        mustResetPassword = true;
+      }
+
       if (!credentialMatchesHash) {
         return res.status(401).json({ success: false, message: "Invalid username or password." });
       }
-      mustResetPassword = await bcrypt.compare(studentDob, authRecord.password_hash || "");
+
+      mustResetPassword = mustResetPassword || isDefaultMatch || (await bcrypt.compare(studentDob, authRecord.password_hash || ""));
     }
 
     const { error: loginUpdateError } = await supabase

@@ -1,0 +1,67 @@
+{
+  "exportedAt": "2026-10-26T11:17:11.070Z",
+  "sourceUrl": "https://ygeofofbsnoytuoffbah.supabase.co",
+  "authUsersCount": 11,
+  "tables": {
+    "user_roles": {
+      "status": "success",
+      "count": 10
+    },
+    "teacher_profiles": {
+      "status": "success",
+      "count": 2
+    },
+    "teacher_assignments": {
+      "status": "success",
+      "count": 6
+    },
+    "students": {
+      "status": "success",
+      "count": 112
+    },
+    "subjects": {
+      "status": "success",
+      "count": 13
+    },
+    "class_subjects": {
+      "status": "success",
+      "count": 12
+    },
+    "marks": {
+      "status": "success",
+      "count": 22
+    },
+    "result_summary": {
+      "status": "success",
+      "count": 0
+    },
+    "previous_dues": {
+      "status": "success",
+      "count": 37
+    },
+    "advance_ledger": {
+      "status": "success",
+      "count": 3
+    },
+    "timetable_settings": {
+      "status": "success",
+      "count": 0
+    },
+    "timetable_periods": {
+      "status": "success",
+      "count": 0
+    },
+    "timetable_entries": {
+      "status": "success",
+      "count": 0
+    },
+    "timetable_substitutions": {
+      "status": "success",
+      "count": 0
+    },
+    "timetable_audit_logs": {
+      "status": "success",
+      "count": 0
+    }
+  }
+}

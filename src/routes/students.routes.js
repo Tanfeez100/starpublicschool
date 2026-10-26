@@ -29,6 +29,55 @@ const isUniqueViolation = (error) =>
   error?.code === "23505" ||
   String(error?.message || "").toLowerCase().includes("duplicate key");
 
+const parseUniqueViolationError = (
+  error,
+  { className, section, academicYear, rollNo } = {}
+) => {
+  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+
+  if (text.includes("admission_number")) {
+    return {
+      message: "Admission / Scholar number is already assigned to another student",
+      field: "admission_number",
+      code: "ADMISSION_NUMBER_CONFLICT",
+    };
+  }
+  if (text.includes("aadhaar")) {
+    return {
+      message: "Aadhaar number is already registered with another student",
+      field: "aadhaar_card",
+      code: "AADHAAR_CONFLICT",
+    };
+  }
+  if (text.includes("pen_number") || text.includes("pen")) {
+    return {
+      message: "PEN number is already registered with another student",
+      field: "pen_number",
+      code: "PEN_CONFLICT",
+    };
+  }
+  if (text.includes("username")) {
+    return {
+      message: "Username is already taken",
+      field: "username",
+      code: "USERNAME_CONFLICT",
+    };
+  }
+  if (text.includes("mobile")) {
+    return {
+      message: "Mobile number is already registered with another student",
+      field: "mobile",
+      code: "MOBILE_CONFLICT",
+    };
+  }
+
+  return {
+    message: buildRollConflictMessage(className, section, academicYear, rollNo),
+    field: "roll_no",
+    code: ROLL_CONFLICT_ERROR_CODE,
+  };
+};
+
 const isMissingStudentProfileColumnError = (error) => {
   const text = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
   return (
@@ -282,6 +331,18 @@ router.get("/all", adminOrTeacher, async (req, res) => {
     const academicYear = normalizeAcademicYear(academicYearRaw);
     const status = normalizeStatus(statusRaw);
 
+    let teacherAssignments = [];
+    if (req.user?.role === "teacher") {
+      teacherAssignments = await getTeacherAssignments(req.user.id);
+      if (!teacherAssignments.length) {
+        return res.json({
+          success: true,
+          count: 0,
+          students: [],
+        });
+      }
+    }
+
     const buildQuery = (selectColumns) => {
       let query = supabase
         .from("students")
@@ -290,8 +351,27 @@ router.get("/all", adminOrTeacher, async (req, res) => {
         .order("section", { ascending: true })
         .order("roll_no", { ascending: true });
 
-      if (cls) query = query.eq("class", String(cls).trim());
-      if (section) query = query.eq("section", String(section).trim());
+      if (req.user?.role === "teacher" && teacherAssignments.length > 0) {
+        const assignedClasses = [...new Set(teacherAssignments.map((a) => String(a.class).trim()))];
+        if (cls) {
+          const requestedClass = String(cls).trim();
+          if (!assignedClasses.includes(requestedClass)) {
+            query = query.eq("class", "__NO_ACCESS__");
+          } else {
+            query = query.eq("class", requestedClass);
+          }
+        } else {
+          query = query.in("class", assignedClasses);
+        }
+
+        if (section) {
+          query = query.eq("section", String(section).trim());
+        }
+      } else {
+        if (cls) query = query.eq("class", String(cls).trim());
+        if (section) query = query.eq("section", String(section).trim());
+      }
+
       if (academicYear) query = query.eq("academic_year", academicYear);
 
       if (status) {
@@ -684,10 +764,13 @@ router.post("/add", adminOnly, async (req, res) => {
 
     if (error) {
       if (isUniqueViolation(error)) {
-        return res.status(409).json({
-          message: buildRollConflictMessage(cls, section, academicYear, rollNo),
-          code: ROLL_CONFLICT_ERROR_CODE,
+        const violation = parseUniqueViolationError(error, {
+          className: cls,
+          section,
+          academicYear,
+          rollNo,
         });
+        return res.status(409).json(violation);
       }
       return res.status(500).json({ message: error.message });
     }
@@ -809,7 +892,9 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
       nextAcademicYear !== existingStudent.academic_year ||
       String(nextRollNo) !== String(existingStudent.roll_no);
 
-    if (nextStatus === STUDENT_STATUS.ACTIVE && (rollTupleChanged || existingStudent.status !== STUDENT_STATUS.ACTIVE)) {
+    const currentStudentStatus = normalizeStatus(existingStudent.status) || STUDENT_STATUS.ACTIVE;
+
+    if (nextStatus === STUDENT_STATUS.ACTIVE && (rollTupleChanged || currentStudentStatus !== STUDENT_STATUS.ACTIVE)) {
       const hasConflict = await checkRollConflictForActiveStudent({
         className: nextClass,
         section: nextSection,
@@ -907,15 +992,13 @@ router.put("/edit/:id", adminOnly, async (req, res) => {
 
     if (error) {
       if (isUniqueViolation(error)) {
-        return res.status(409).json({
-          message: buildRollConflictMessage(
-            nextClass,
-            nextSection,
-            nextAcademicYear,
-            nextRollNo
-          ),
-          code: ROLL_CONFLICT_ERROR_CODE,
+        const violation = parseUniqueViolationError(error, {
+          className: nextClass,
+          section: nextSection,
+          academicYear: nextAcademicYear,
+          rollNo: nextRollNo,
         });
+        return res.status(409).json(violation);
       }
       return res.status(500).json({
         message: "Failed to update student",
@@ -1085,10 +1168,13 @@ router.patch("/:id/rejoin", adminOnly, async (req, res) => {
 
     if (updateError) {
       if (isUniqueViolation(updateError)) {
-        return res.status(409).json({
-          message: buildRollConflictMessage(cls, section, academicYear, rollNo),
-          code: ROLL_CONFLICT_ERROR_CODE,
+        const violation = parseUniqueViolationError(updateError, {
+          className: cls,
+          section,
+          academicYear,
+          rollNo,
         });
+        return res.status(409).json(violation);
       }
       return res.status(500).json({
         message: "Failed to rejoin student",
