@@ -36,7 +36,7 @@ export const generateBillsPDF = async (month, className = null) => {
       // Fetch fee_bills for the month with student details
       let billsQuery = supabase
         .from('fee_bills')
-        .select(`*, students ( name, class, roll_no, father_name )`)
+        .select(`*, students ( name, class, roll_no, father_name, uses_transport, transport_charge )`)
         .eq('month', month);
 
       if (studentIdsForClass) {
@@ -74,6 +74,16 @@ export const generateBillsPDF = async (month, className = null) => {
           else if (n.includes('transport')) transport_fee += parseFloat(it.amount || 0);
           else if (n.includes('previous')) previous_due += parseFloat(it.amount || 0);
         });
+
+        const isUsingTransport = Boolean(
+          bill.students?.uses_transport === true ||
+          String(bill.students?.uses_transport).toLowerCase() === 'true' ||
+          bill.students?.uses_transport === 1
+        );
+        const studentTransportCharge = parseFloat(bill.students?.transport_charge || 0);
+        if (isUsingTransport && studentTransportCharge > 0 && transport_fee === 0) {
+          transport_fee = studentTransportCharge;
+        }
 
         const paidFromPayments = paymentsMap[bill.id] || 0;
         const outstandingFromFees = Math.max(0, parseFloat(bill.total_amount || 0) - paidFromPayments);

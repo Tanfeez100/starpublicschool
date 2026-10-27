@@ -27,7 +27,9 @@ export const downloadInvoice = async (req, res) => {
           father_name,
           roll_no,
           class,
-          section
+          section,
+          uses_transport,
+          transport_charge
         )
       `
       )
@@ -66,8 +68,30 @@ export const downloadInvoice = async (req, res) => {
       });
     }
 
+    const finalBillItems = billItems ? [...billItems] : [];
+    const studentObj = bill.students || {};
+    const isStudentUsingTransport = Boolean(
+      studentObj.uses_transport === true ||
+      String(studentObj.uses_transport).toLowerCase() === 'true' ||
+      studentObj.uses_transport === 1
+    );
+    const transportChargeAmt = parseFloat(studentObj.transport_charge || 0);
+    const transportIdx = finalBillItems.findIndex(i => (i.fee_name || "").toLowerCase().includes("transport"));
+
+    if (isStudentUsingTransport && transportChargeAmt > 0) {
+      if (transportIdx >= 0) {
+        if (parseFloat(finalBillItems[transportIdx].amount || 0) === 0) {
+          finalBillItems[transportIdx] = { ...finalBillItems[transportIdx], amount: transportChargeAmt };
+        }
+      } else {
+        finalBillItems.push({ fee_name: "Transport Fee", amount: transportChargeAmt });
+      }
+    }
+
     const totalPaid = payments?.reduce((sum, p) => sum + (p.amount_paid || 0), 0) || 0;
-    const remaining = Math.max(0, parseFloat(bill.total_amount || 0) - parseFloat(totalPaid || 0));
+    const computedItemsTotal = finalBillItems.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+    const effectiveTotal = Math.max(parseFloat(bill.total_amount || 0), computedItemsTotal);
+    const remaining = Math.max(0, effectiveTotal - parseFloat(totalPaid || 0));
 
     // Prepare invoice data
     const invoiceData = {
@@ -75,9 +99,9 @@ export const downloadInvoice = async (req, res) => {
       date: bill.created_at,
       month: bill.month,
       student: bill.students,
-      items: billItems || [],
+      items: finalBillItems,
       payments: payments || [],
-      total_amount: bill.total_amount,
+      total_amount: effectiveTotal,
       total_paid: totalPaid,
       remaining: remaining,
       status: bill.bill_status,

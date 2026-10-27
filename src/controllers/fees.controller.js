@@ -4,6 +4,12 @@ import {
   loadBillNotificationContext,
   sendStudentPushNotification,
 } from "../services/studentNotificationService.js";
+import {
+  getCachedBillPdf,
+  setCachedBillPdf,
+  invalidateBillPdf,
+  uploadPdfBuffer,
+} from "../services/pdfCache.service.js";
 
 const toSafeString = (value) => String(value ?? "").trim();
 
@@ -366,7 +372,7 @@ export const getFeeList = async (req, res) => {
 
     let studentQuery = supabase
       .from("students")
-      .select("id, name, father_name, roll_no, class, section")
+      .select("id, name, father_name, roll_no, class, section, uses_transport, transport_charge")
       .eq("status", "active"); // ✅ Only active students
 
     if (className) studentQuery = studentQuery.in("class", buildClassVariants(className));
@@ -599,6 +605,17 @@ export const getFeeList = async (req, res) => {
           else if (name.includes("transport")) breakdown.transport_fee += amt;
           else if (name.includes("previous")) breakdown.previous_due += amt;
         });
+
+        // Ensure transport fee is included for students using transport if missing or 0 in items
+        const isUsingTransport = Boolean(
+          student.uses_transport === true ||
+          String(student.uses_transport).toLowerCase() === 'true' ||
+          student.uses_transport === 1
+        );
+        const studentTransportCharge = parseFloat(student.transport_charge || 0);
+        if (isUsingTransport && studentTransportCharge > 0 && breakdown.transport_fee === 0) {
+          breakdown.transport_fee = studentTransportCharge;
+        }
 
         // Calculate total_fee from breakdown instead of bill.total_amount
         const totalFee = breakdown.tuition_fee + breakdown.exam_fee + breakdown.annual_fee + breakdown.computer_fee + breakdown.transport_fee + breakdown.previous_due;
@@ -860,6 +877,11 @@ export const payFee = async (req, res) => {
       console.error("Error clearing previous dues on bill payment:", clearErr);
     }
 
+    // Invalidate cached PDF so refreshed receipt with updated payment will be generated next time
+    if (bill?.id) {
+      invalidateBillPdf(bill.id);
+    }
+
     // 4) Return canonical response (use DB-returned values)
     return res.json({
       message: 'Payment processed successfully',
@@ -898,7 +920,9 @@ export const getInvoice = async (req, res) => {
           father_name,
           roll_no,
           class,
-          section
+          section,
+          uses_transport,
+          transport_charge
         )
       `)
       .eq("id", bill_id)
@@ -985,6 +1009,30 @@ export const getInvoice = async (req, res) => {
         0
       ) || 0;
 
+    const finalBillItems = billItems ? [...billItems] : [];
+    const studentObj = bill.students || {};
+    const isStudentUsingTransport = Boolean(
+      studentObj.uses_transport === true ||
+      String(studentObj.uses_transport).toLowerCase() === 'true' ||
+      studentObj.uses_transport === 1
+    );
+    const transportChargeAmt = parseFloat(studentObj.transport_charge || 0);
+    const transportIdx = finalBillItems.findIndex(i => (i.fee_name || "").toLowerCase().includes("transport"));
+
+    if (isStudentUsingTransport && transportChargeAmt > 0) {
+      if (transportIdx >= 0) {
+        if (parseFloat(finalBillItems[transportIdx].amount || 0) === 0) {
+          finalBillItems[transportIdx] = { ...finalBillItems[transportIdx], amount: transportChargeAmt };
+        }
+      } else {
+        finalBillItems.push({ fee_name: "Transport Fee", amount: transportChargeAmt });
+      }
+    }
+
+    const computedItemsTotal = finalBillItems.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+    const effectiveTotal = Math.max(parseFloat(bill.total_amount || 0), computedItemsTotal);
+    const effectiveRemaining = Math.max(0, effectiveTotal - totalPaidIncludingAdvance);
+
     return res.json({
       message: "Invoice fetched successfully",
       invoice: {
@@ -992,23 +1040,24 @@ export const getInvoice = async (req, res) => {
         invoice_number: `INV-${bill.id.substring(0, 8).toUpperCase()}`,
         date: bill.created_at,
         month: bill.month,
+        cached_pdf_url: getCachedBillPdf(bill.id)?.url || null,
 
         student: bill.students,
 
-        items: billItems || [],
+        items: finalBillItems,
 
         payments: payments || [],
 
         summary: {
-          total_amount: parseFloat(bill.total_amount || 0),
+          total_amount: effectiveTotal,
           direct_paid: directPaid,
           total_paid: directPaid,
           advance_used: advanceUsed,
           total_paid_including_advance: totalPaidIncludingAdvance,
-          remaining: remaining,
+          remaining: effectiveRemaining,
           active_advance_balance: activeAdvanceBalance,
           status:
-            remaining === 0
+            effectiveRemaining === 0
               ? "paid"
               : totalPaidIncludingAdvance > 0
                 ? "partial"
@@ -1732,6 +1781,63 @@ export const getFeeDashboardOverview = async (req, res) => {
       message: "Server error while fetching dashboard data",
       error: error.message,
     });
+  }
+};
+
+/**
+ * GET /api/fees/cached-pdf/:bill_id
+ * Returns cached PDF metadata if available
+ */
+export const getCachedBillPdfController = async (req, res) => {
+  try {
+    const { bill_id } = req.params;
+    if (!bill_id) {
+      return res.status(400).json({ success: false, message: "bill_id is required" });
+    }
+    const cached = getCachedBillPdf(bill_id);
+    if (!cached || !cached.url) {
+      return res.status(404).json({ success: false, message: "PDF not cached yet" });
+    }
+    return res.json({ success: true, ...cached });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+/**
+ * POST /api/fees/cached-pdf/:bill_id
+ * Uploads generated PDF base64 to Cloudinary/local storage and stores in cache
+ */
+export const saveCachedBillPdfController = async (req, res) => {
+  try {
+    const { bill_id } = req.params;
+    const { pdfBase64, filename } = req.body || {};
+    if (!bill_id || !pdfBase64) {
+      return res.status(400).json({
+        success: false,
+        message: "bill_id and pdfBase64 are required",
+      });
+    }
+
+    const cleanBase64 = String(pdfBase64).replace(/^data:application\/pdf;base64,/, "");
+    const buffer = Buffer.from(cleanBase64, "base64");
+    const safeFilename = filename || `fee-receipt-${bill_id.slice(0, 8)}`;
+
+    const uploadResult = await uploadPdfBuffer(buffer, {
+      filename: safeFilename,
+      folder: "bills",
+    });
+
+    const saved = setCachedBillPdf(bill_id, {
+      url: uploadResult.url,
+      provider: uploadResult.provider,
+      filename: `${safeFilename}.pdf`,
+    });
+
+    return res.json({ success: true, ...saved });
+  } catch (err) {
+    console.error("Error saving cached bill PDF:", err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 

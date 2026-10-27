@@ -128,13 +128,63 @@ export const getBillsDownloadData = async (req, res) => {
 
       const advanceUsed = advanceUsedRows?.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0) || 0;
 
-      // 🚍 Transport fee check
-      let finalItems = items || [];
-      const hasTransportItem = finalItems.some(i => (i.fee_name || "").toLowerCase().includes("transport"));
+      // 🚍 Transport fee check & sync
+      let finalItems = items ? [...items] : [];
+      const isUsingTransport = Boolean(
+        student.uses_transport === true ||
+        String(student.uses_transport).toLowerCase() === 'true' ||
+        student.uses_transport === 1
+      );
+      const studentTransportCharge = parseFloat(student.transport_charge || 0);
+      const transportItemIdx = finalItems.findIndex(i => (i.fee_name || "").toLowerCase().includes("transport"));
 
-      if (student.uses_transport && student.transport_charge && !hasTransportItem) {
-        finalItems.push({ fee_name: "Transport Fee", amount: student.transport_charge });
+      let transportChargeToAdd = 0;
+      if (isUsingTransport && studentTransportCharge > 0) {
+        if (transportItemIdx >= 0) {
+          const currentItemAmt = parseFloat(finalItems[transportItemIdx].amount || 0);
+          if (currentItemAmt === 0) {
+            finalItems[transportItemIdx] = {
+              ...finalItems[transportItemIdx],
+              amount: studentTransportCharge,
+            };
+            transportChargeToAdd = studentTransportCharge;
+          }
+        } else {
+          finalItems.push({ fee_name: "Transport Fee", amount: studentTransportCharge });
+          transportChargeToAdd = studentTransportCharge;
+        }
+
+        // Auto-heal unpaid bill in DB if transport fee was missing or 0
+        if (transportChargeToAdd > 0 && bill.bill_status !== 'paid') {
+          (async () => {
+            try {
+              if (transportItemIdx >= 0) {
+                await supabaseAdmin
+                  .from("fee_bill_items")
+                  .update({ amount: studentTransportCharge })
+                  .eq("bill_id", bill.id)
+                  .ilike("fee_name", "%transport%");
+              } else {
+                await supabaseAdmin
+                  .from("fee_bill_items")
+                  .insert({ bill_id: bill.id, fee_name: "Transport Fee", amount: studentTransportCharge });
+              }
+              const newTotal = parseFloat(bill.total_amount || 0) + transportChargeToAdd;
+              const newNet = parseFloat(bill.net_payable || 0) + transportChargeToAdd;
+              await supabaseAdmin
+                .from("fee_bills")
+                .update({ total_amount: newTotal, net_payable: newNet, updated_at: new Date().toISOString() })
+                .eq("id", bill.id);
+            } catch (err) {
+              console.error("Auto-sync transport fee error:", err);
+            }
+          })();
+        }
       }
+
+      const calculatedTotalFromItems = finalItems.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
+      const effectiveTotal = Math.max(parseFloat(bill.total_amount || 0), calculatedTotalFromItems);
+      const effectiveNetPayable = Math.max(0, effectiveTotal - advanceUsed);
 
       formattedBills.push({
         bill_id: bill.id,
@@ -158,11 +208,9 @@ export const getBillsDownloadData = async (req, res) => {
         month: bill.month,
         items: finalItems,
         summary: {
-          total_amount: parseFloat(bill.total_amount || 0),
+          total_amount: effectiveTotal,
           advance_used: advanceUsed,
-          // BUG FIX: Use stored net_payable as source of truth, not recalculated value
-          // bill.net_payable is set by fn_process_payment DB function accurately
-          net_payable: parseFloat(bill.net_payable ?? Math.max(0, parseFloat(bill.total_amount || 0) - advanceUsed)),
+          net_payable: parseFloat(bill.net_payable ? Math.max(bill.net_payable, effectiveNetPayable) : effectiveNetPayable),
           status: bill.bill_status,
         },
         receipt_number: bill.receipt_number || null,
@@ -238,6 +286,7 @@ export const createBillsForClass = async (className, month, section = null, opti
     include_exam_fee = true,
     include_annual_fee = true,
     include_computer_fee = true,
+    include_transport_fee = true,
     migrationStudentData = null, // Map of student_id -> pending_due for migration
   } = options;
 
@@ -371,9 +420,14 @@ export const createBillsForClass = async (className, month, section = null, opti
           }
         }
 
-        // ✅ Exclude transport during migration month
+        // ✅ Exclude transport during migration month; check uses_transport & charge
+        const isUsingTransport = Boolean(
+          student.uses_transport === true ||
+          String(student.uses_transport).toLowerCase() === 'true' ||
+          student.uses_transport === 1
+        );
         const transport =
-          !migrationStudentData && student.uses_transport && student.transport_charge
+          !migrationStudentData && include_transport_fee && isUsingTransport && student.transport_charge
             ? parseFloat(student.transport_charge)
             : 0;
 
@@ -637,12 +691,14 @@ export const generateBillsForClass = async (req, res) => {
       include_exam_fee = true,
       include_annual_fee = true,
       include_computer_fee = true,
+      include_transport_fee = true,
     } = req.body;
 
     const summary = await createBillsForClass(className, month, section, {
       include_exam_fee,
       include_annual_fee,
       include_computer_fee,
+      include_transport_fee,
     });
 
     return res.json({

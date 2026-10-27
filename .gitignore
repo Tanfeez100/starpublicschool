@@ -53,3 +53,8 @@ migrations/*.sql
   scripts/test-timetable.js
   data/document_templates.json
   data/examinations_data.json
+
+# Local cached files & runtime caches
+uploads/
+uploads/**
+data/pdf_cache.json

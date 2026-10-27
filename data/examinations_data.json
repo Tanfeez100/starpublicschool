@@ -176,6 +176,134 @@
       "is_optional": false,
       "evaluation_type": "marks",
       "updated_at": "2026-10-26T13:11:42.129Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-1",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "English",
+      "subject_code": "ENG",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-2",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "Hindi",
+      "subject_code": "HIN",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-3",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "Mathematics",
+      "subject_code": "MATH",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-4",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "Science / EVS",
+      "subject_code": "EVS",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-5",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "Social Studies",
+      "subject_code": "SST",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 80,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-6",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "Computer Science",
+      "subject_code": "COMP",
+      "max_marks": 100,
+      "pass_marks": 33,
+      "theory_marks": 50,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 50,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-7",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "General Knowledge",
+      "subject_code": "GK",
+      "max_marks": 70,
+      "pass_marks": 23,
+      "theory_marks": 50,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
+    },
+    {
+      "id": "esub-1793116107844-sub-8",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "subject_name": "Art & Craft",
+      "subject_code": "ART",
+      "max_marks": 70,
+      "pass_marks": 23,
+      "theory_marks": 50,
+      "practical_marks": 0,
+      "oral_marks": 0,
+      "internal_marks": 20,
+      "is_optional": false,
+      "evaluation_type": "marks",
+      "created_at": "2026-10-27T15:48:27.844Z"
     }
   ],
   "examination_timetables": [
@@ -246,6 +374,74 @@
       "status": "draft",
       "created_at": "2026-10-01T00:00:00.000Z",
       "updated_at": "2026-10-26T07:51:35.988Z"
+    },
+    {
+      "id": "tt-1793116097008-lxmk",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "section": "All",
+      "subject_name": "English",
+      "exam_date": "2026-10-15",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Bring HB pencils and coloring set for section B.",
+      "status": "draft",
+      "created_at": "2026-10-27T15:48:17.008Z",
+      "updated_at": "2026-10-27T15:48:17.008Z"
+    },
+    {
+      "id": "tt-1793116097008-0nfe",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "section": "All",
+      "subject_name": "Mathematics",
+      "exam_date": "2026-10-17",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Rulers and geometric tools permitted.",
+      "status": "draft",
+      "created_at": "2026-10-27T15:48:17.008Z",
+      "updated_at": "2026-10-27T15:48:17.008Z"
+    },
+    {
+      "id": "tt-1793116097008-6bsj",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "section": "All",
+      "subject_name": "Hindi",
+      "exam_date": "2026-10-19",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Oral assessment will be conducted immediately following written paper.",
+      "status": "draft",
+      "created_at": "2026-10-27T15:48:17.008Z",
+      "updated_at": "2026-10-27T15:48:17.008Z"
+    },
+    {
+      "id": "tt-1793116097008-rne7",
+      "examination_id": "exam-2026-hy-01",
+      "class_name": "Class 2",
+      "section": "All",
+      "subject_name": "EVS",
+      "exam_date": "2026-10-21",
+      "start_time": "09:00 AM",
+      "end_time": "11:30 AM",
+      "max_marks": 50,
+      "pass_marks": 17,
+      "room_no": "Room 101",
+      "instructions": "Environmental Science comprehensive paper.",
+      "status": "draft",
+      "created_at": "2026-10-27T15:48:17.008Z",
+      "updated_at": "2026-10-27T15:48:17.008Z"
     }
   ],
   "examination_marks": [
@@ -403,7 +599,7 @@
       "remarks": "Needs Improvement",
       "rank": null,
       "status": "draft",
-      "calculated_at": "2026-10-26T13:43:25.479Z"
+      "calculated_at": "2026-10-27T17:24:18.017Z"
     },
     {
       "id": "res-1792838146183-y8yg",
@@ -503,7 +699,7 @@
       "remarks": "Needs Improvement",
       "rank": null,
       "status": "draft",
-      "calculated_at": "2026-10-26T13:43:25.479Z"
+      "calculated_at": "2026-10-27T17:24:18.017Z"
     },
     {
       "id": "res-1792838146183-brqv",
@@ -603,7 +799,7 @@
       "remarks": "Needs Improvement",
       "rank": null,
       "status": "draft",
-      "calculated_at": "2026-10-26T13:43:25.479Z"
+      "calculated_at": "2026-10-27T17:24:18.017Z"
     },
     {
       "id": "res-1792838146183-fr6f",
@@ -703,7 +899,7 @@
       "remarks": "Needs Improvement",
       "rank": null,
       "status": "draft",
-      "calculated_at": "2026-10-26T13:43:25.479Z"
+      "calculated_at": "2026-10-27T17:24:18.017Z"
     },
     {
       "id": "res-1792838146183-qcfl",
@@ -803,7 +999,7 @@
       "remarks": "Needs Improvement",
       "rank": null,
       "status": "draft",
-      "calculated_at": "2026-10-26T13:43:25.479Z"
+      "calculated_at": "2026-10-27T17:24:18.017Z"
     }
   ],
   "examination_notices": [

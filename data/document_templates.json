@@ -1,7 +1,7 @@
 {
   "id_card": {
     "category": "id_card",
-    "activeTemplateId": "id_card_modern_tech",
+    "activeTemplateId": "id_card_modern_blue",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
       "tagline": "Affiliated to State Board | Affiliation No: 2130894",
@@ -18,7 +18,7 @@
       "validTill": "31/03/2027",
       "academicYear": "2026-2027"
     },
-    "updatedAt": "2026-10-26T08:01:20.905Z",
+    "updatedAt": "2026-10-27T16:50:41.248Z",
     "updatedBy": "ta2nfeez@gmail.com"
   },
   "admit_card": {
@@ -74,7 +74,7 @@
   },
   "marksheet": {
     "category": "marksheet",
-    "activeTemplateId": "marksheet_bihar_board",
+    "activeTemplateId": "marksheet_premium_blue_white",
     "customization": {
       "boardName": "BIHAR SCHOOL EXAMINATION BOARD / ACADEMIC COUNCIL",
       "schoolName": "STAR PUBLIC SCHOOL, WEST CHAMPARAN",
@@ -93,7 +93,7 @@
       "inchargeSignLabel": "Examination Controller",
       "principalSignLabel": "Headmaster / Principal"
     },
-    "updatedAt": "2026-10-24T10:32:05.985Z",
+    "updatedAt": "2026-10-27T16:48:11.323Z",
     "updatedBy": "ta2nfeez@gmail.com"
   }
 }

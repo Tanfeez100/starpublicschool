@@ -7,6 +7,8 @@ import {
   payFee,
   getInvoice,
   getFeeDashboardOverview,
+  getCachedBillPdfController,
+  saveCachedBillPdfController,
 } from "../controllers/fees.controller.js";
 import {
   getAutoCloseCronStatus,
@@ -91,6 +93,18 @@ router.post("/pay", adminOnly, payFee);
  * Admin or Teacher
  */
 router.get("/invoice/:bill_id", adminOrTeacher, getInvoice);
+
+/**
+ * GET /api/fees/cached-pdf/:bill_id
+ * Check if a bill/receipt has already been generated and cached in Cloudinary/local
+ */
+router.get("/cached-pdf/:bill_id", getCachedBillPdfController);
+
+/**
+ * POST /api/fees/cached-pdf/:bill_id
+ * Cache a generated bill/receipt PDF
+ */
+router.post("/cached-pdf/:bill_id", saveCachedBillPdfController);
 
 export default router;
 

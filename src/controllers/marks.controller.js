@@ -1,4 +1,10 @@
 import { supabase } from "../services/supabase.js";
+import {
+  uploadPdfBuffer,
+  getCachedResultPdf,
+  setCachedResultPdf,
+  invalidateResultPdf,
+} from "../services/pdfCache.service.js";
 
 const ALLOWED_RESULT_TERMINALS = new Set(["first", "second", "third", "annual"]);
 
@@ -1387,6 +1393,22 @@ export const getResultByClassRoll = async (req, res) => {
       terminal: requestedTerminalRaw || cachedOrBuiltPayload.terminal,
     };
 
+    // Check if high-definition PDF is already cached in Cloudinary/Storage
+    try {
+      const cachedPdf = getCachedResultPdf({
+        session: responsePayload.student?.academic_year || requestedAcademicYearRaw || "2026-27",
+        className: responsePayload.student?.class || cls,
+        section: responsePayload.student?.section || section || "A",
+        roll: responsePayload.student?.roll_no || roll,
+        terminal: responsePayload.terminal || requestedTerminal,
+      });
+      responsePayload.cached_pdf_url = cachedPdf?.url || null;
+      responsePayload.cached_pdf_local = cachedPdf?.local_fallback || null;
+    } catch {
+      responsePayload.cached_pdf_url = null;
+      responsePayload.cached_pdf_local = null;
+    }
+
     setReadCacheHeaders({
       res,
       ttlMs: RESULT_BY_ROLL_CACHE_TTL_MS,
@@ -1398,6 +1420,89 @@ export const getResultByClassRoll = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Check if Result PDF exists in cache
+ * GET /api/marks/result/cached-pdf?session=2026-27&class=1&section=A&roll=5&terminal=First
+ */
+export const getCachedResultPdfController = async (req, res) => {
+  try {
+    const { session = "2026-27", class: className, section = "A", roll, terminal } = req.query;
+    if (!className || !roll || !terminal) {
+      return res.status(400).json({ success: false, message: "class, roll, and terminal are required" });
+    }
+
+    const cached = getCachedResultPdf({ session, className, section, roll, terminal });
+    if (cached && cached.url) {
+      return res.json({ success: true, exists: true, data: cached });
+    }
+    return res.json({ success: true, exists: false, data: null });
+  } catch (err) {
+    console.error("Error checking cached result PDF:", err);
+    return res.status(500).json({ success: false, message: "Error checking cached PDF", error: err.message });
+  }
+};
+
+/**
+ * Upload & Store Result PDF in Cloudinary & Cache (Lazy / On-demand caching)
+ * POST /api/marks/result/cached-pdf
+ * Body: { session, className, section, roll, terminal, student_id, pdfBase64 }
+ */
+export const saveCachedResultPdfController = async (req, res) => {
+  try {
+    const {
+      session = "2026-27",
+      className,
+      section = "A",
+      roll,
+      terminal,
+      student_id,
+      pdfBase64,
+    } = req.body;
+
+    if (!pdfBase64 || !className || !roll || !terminal) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields (pdfBase64, className, roll, terminal)",
+      });
+    }
+
+    // Convert Base64 string to Buffer
+    const cleanBase64 = String(pdfBase64).replace(/^data:application\/pdf;base64,/, "");
+    const pdfBuffer = Buffer.from(cleanBase64, "base64");
+
+    const safeFilename = `result_${session}_${className}_Sec${section}_Roll${roll}_${terminal}`.replace(/[\s/]/g, "_");
+
+    const uploadResult = await uploadPdfBuffer(pdfBuffer, {
+      filename: safeFilename,
+      folder: "results",
+    });
+
+    const cachedEntry = setCachedResultPdf(
+      { session, className, section, roll, terminal },
+      {
+        url: uploadResult.url,
+        provider: uploadResult.provider,
+        public_id: uploadResult.public_id,
+        local_fallback: uploadResult.local_fallback,
+        student_id,
+      }
+    );
+
+    return res.json({
+      success: true,
+      message: "Result PDF cached successfully",
+      data: cachedEntry,
+    });
+  } catch (err) {
+    console.error("Error saving cached result PDF:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cache result PDF",
+      error: err.message,
+    });
   }
 };
 
@@ -1637,6 +1742,13 @@ export const submitMarks = async (req, res) => {
     }
 
     invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
+    invalidateResultPdf({
+      session: academicYear,
+      className,
+      section,
+      roll: roll_no,
+      terminal,
+    });
 
     res.json({
       success: true,
@@ -1977,6 +2089,10 @@ export const publishResult = async (req, res) => {
     }
 
     invalidateReadCacheByPrefix(["resultByRoll:", "marksByClass:"]);
+    invalidateResultPdf({
+      className,
+      terminal,
+    });
 
     res.json({
       success: true,

@@ -4,6 +4,8 @@ import {
   submitMarks,
   publishResult,
   getMarks,
+  getCachedResultPdfController,
+  saveCachedResultPdfController,
 } from "../controllers/marks.controller.js";
 import { adminOrTeacher, adminOnly } from "../middleware/auth.middleware.js";
 
@@ -17,6 +19,10 @@ router.post("/submit", adminOrTeacher, submitMarks);
 
 /* STUDENT / RESULT - PUBLIC (No middleware) - Students can view their result */
 router.get("/result", getResultByClassRoll);
+
+/* CACHED RESULT PDF - PUBLIC - Get or Save on-demand cached PDF */
+router.get("/result/cached-pdf", getCachedResultPdfController);
+router.post("/result/cached-pdf", saveCachedResultPdfController);
 
 /* PUBLISH RESULT - Admin Only */
 router.post("/publish", adminOnly, publishResult);
