@@ -54,7 +54,7 @@ const MAX_READ_CACHE_ITEMS = toPositiveInt(
   300
 );
 const RESULT_TERMINAL_LABELS = ["First", "Second", "Third", "Annual"];
-const RESULT_BY_ROLL_RESPONSE_VERSION = "v3";
+const RESULT_BY_ROLL_RESPONSE_VERSION = "v4";
 const MARK_STATUS = {
   PENDING: "PENDING",
   SUBMITTED: "SUBMITTED",
@@ -491,15 +491,20 @@ const resolveStudentForResult = async ({
         "id, name, father_name, mother_name, class, section, roll_no, academic_year, status, photo_url, created_at"
       )
       .eq("class", normalizedClass)
-      .eq("roll_no", normalizedRoll)
-      .eq("status", "active")
-      .order("academic_year", { ascending: false })
-      .order("created_at", { ascending: false })
-      .limit(5);
+      .eq("roll_no", normalizedRoll);
 
     if (normalizedSection) {
       fallbackQuery = fallbackQuery.ilike("section", normalizedSection);
     }
+
+    if (normalizedAcademicYears.length) {
+      fallbackQuery = fallbackQuery.in("academic_year", normalizedAcademicYears);
+    }
+
+    fallbackQuery = fallbackQuery
+      .order("academic_year", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(5);
 
     const fallbackResult = await fallbackQuery;
     if (fallbackResult.error) {
@@ -519,7 +524,11 @@ const resolveStudentForResult = async ({
       return {
         error: {
           status: 404,
-          body: { message: "Student not found" },
+          body: {
+            message: normalizedSection
+              ? `Student not found for class "${className}", section "${section}", roll "${roll}"`
+              : "Student not found",
+          },
         },
       };
     }
@@ -606,7 +615,7 @@ const getSubjectMaxMarks = (subject) => {
 const getTerminalResult = async (student, cls, section, terminal, classSubjects) => {
   try {
     const subjectIds = classSubjects.map((cs) => cs.subject_id || cs.subjects?.id).filter(Boolean);
-    
+
     const { data: marksData, error: marksError } = await supabase
       .from("marks")
       .select("*")
@@ -637,7 +646,7 @@ const getTerminalResult = async (student, cls, section, terminal, classSubjects)
     classSubjects.forEach((cs) => {
       const subject = cs.subjects;
       if (!subject || !subject.id) return;
-      
+
       const maxMarks = getSubjectMaxMarks(subject);
       const subjectId = cs.subject_id || subject.id;
       const obtained = marksMap[subjectId] || {
@@ -662,9 +671,9 @@ const getTerminalResult = async (student, cls, section, terminal, classSubjects)
     const percentage = totalMaxMarks > 0 ? ((totalObtained / totalMaxMarks) * 100).toFixed(2) : "0.00";
     const division =
       percentage >= 60 ? "First"
-      : percentage >= 45 ? "Second"
-      : percentage >= 33 ? "Third"
-      : "Fail";
+        : percentage >= 45 ? "Second"
+          : percentage >= 30 ? "Third"
+            : "Fail";
 
     // Check if published
     const { data: publishedSummary } = await supabase
@@ -726,11 +735,11 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
       .select("*")
       .eq("class", cls)
       .eq("roll_no", Number(roll));
-    
+
     if (section) {
       studentQuery = studentQuery.eq("section", section);
     }
-    
+
     const { data: student, error: studentError } = await studentQuery.single();
 
     if (studentError || !student) {
@@ -739,7 +748,7 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
 
     // Get class subjects
     let classSubjects = null;
-    
+
     if (section) {
       const { data: sectionData, error: sectionError } = await supabase
         .from("class_subjects")
@@ -779,15 +788,15 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
 
       classSubjects = allData;
       if (allError) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "Failed to fetch subjects for this class",
-          error: allError.message 
+          error: allError.message
         });
       }
     }
 
     if (!classSubjects || classSubjects.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: `No subjects found for class "${cls}"`,
       });
     }
@@ -812,15 +821,15 @@ const getAnnualResult = async (req, res, cls, roll, section) => {
       annualTotalObtained += result.summary.total_obtained;
     });
 
-    const annualPercentage = annualTotalMaxMarks > 0 
+    const annualPercentage = annualTotalMaxMarks > 0
       ? parseFloat(((annualTotalObtained / annualTotalMaxMarks) * 100).toFixed(2))
       : 0;
 
     const annualDivision =
       annualPercentage >= 60 ? "First"
-      : annualPercentage >= 45 ? "Second"
-      : annualPercentage >= 33 ? "Third"
-      : "Fail";
+        : annualPercentage >= 45 ? "Second"
+          : annualPercentage >= 33 ? "Third"
+            : "Fail";
 
     // Response with all terminals
     res.json({
@@ -1012,8 +1021,34 @@ export const getResultByClassRoll = async (req, res) => {
       ? studentResult.students
       : [studentResult.student].filter(Boolean);
 
+    if (section && String(student?.section || "").trim().toUpperCase() !== String(section).trim().toUpperCase()) {
+      return res.status(404).json({
+        message: `Student not found for section "${section}"`,
+      });
+    }
+
+    if (!section && candidateStudents.length > 1) {
+      const distinctSections = Array.from(
+        new Set(
+          candidateStudents
+            .map((s) => String(s?.section || "").trim().toUpperCase())
+            .filter(Boolean)
+        )
+      );
+      if (distinctSections.length > 1) {
+        return res.status(400).json({
+          message: `Multiple sections found for class "${cls}" roll "${roll}". Please specify section (${distinctSections.join(", ")}).`,
+        });
+      }
+    }
+
     const findPublishedCandidate = async (candidates) => {
       for (const candidate of candidates) {
+        if (section) {
+          const candSec = String(candidate?.section || "").trim().toUpperCase();
+          if (candSec !== String(section).trim().toUpperCase()) continue;
+        }
+
         const { data: candidateSummary, error: candidateError } = await supabase
           .from("result_summary")
           .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
@@ -1033,62 +1068,15 @@ export const getResultByClassRoll = async (req, res) => {
     const publishedMatch = await findPublishedCandidate(candidateStudents);
     if (publishedMatch) {
       student = publishedMatch.student;
-    }
-
-    if (!publishedMatch) {
-      const { data: publishedStudentRows, error: publishedStudentError } = await supabase
-        .from("result_summary")
-        .select(`
-          calculated_at,
-          status,
-          terminal,
-          students!inner (
-            id,
-            name,
-            class,
-            section,
-            roll_no,
-            academic_year,
-            status,
-            photo_url
-          )
-        `)
-        .eq("terminal", requestedTerminal)
-        .eq("status", "Published")
-        .eq("students.class", cls)
-        .eq("students.status", "active")
-        .eq("students.roll_no", Number(roll))
-        .limit(5);
-
-      if (!publishedStudentError && publishedStudentRows?.length) {
-        const candidateRow = publishedStudentRows.find((row) => {
-          const rowStudent = row?.students;
-          if (!rowStudent) return false;
-          if (section && String(rowStudent.section || "").trim() !== String(section).trim()) return false;
-          if (hasRequestedAcademicYear) {
-            return requestedAcademicYears.includes(String(rowStudent.academic_year || "").trim());
-          }
-          return true;
-        }) || publishedStudentRows[0];
-
-        if (candidateRow?.students) {
-          student = {
-            id: candidateRow.students.id,
-            name: candidateRow.students.name,
-            class: candidateRow.students.class,
-            section: candidateRow.students.section,
-            roll_no: candidateRow.students.roll_no,
-            academic_year: candidateRow.students.academic_year || null,
-            status: candidateRow.students.status || null,
-            photo_url: candidateRow.students.photo_url || null,
-          };
-        }
-      }
+    } else {
+      return res.status(404).json({
+        message: "Result not published yet",
+      });
     }
 
     const { classSubjects, csError } = await fetchClassSubjectsWithFallback(
       cls,
-      section
+      student.section || section
     );
 
     if (csError) {
@@ -1186,7 +1174,7 @@ export const getResultByClassRoll = async (req, res) => {
     const divisionFromPercentage = (percentage) => {
       if (percentage >= 60) return "First";
       if (percentage >= 45) return "Second";
-      if (percentage >= 33) return "Third";
+      if (percentage >= 30) return "Third";
       return "Fail";
     };
 
@@ -1368,12 +1356,12 @@ export const getResultByClassRoll = async (req, res) => {
           mother_name: student.mother_name || null,
           class: student.class,
           roll_no: student.roll_no,
-        section: student.section,
-        academic_year: student.academic_year || requestedAcademicYearRaw || null,
-        photo_url: student.photo_url || null,
-        PhotoUrl: student.photo_url || null,
-        photo: student.photo_url || null,
-      },
+          section: student.section,
+          academic_year: student.academic_year || requestedAcademicYearRaw || null,
+          photo_url: student.photo_url || null,
+          PhotoUrl: student.photo_url || null,
+          photo: student.photo_url || null,
+        },
         terminal: terminalLabel,
         resolved_terminal: terminalLabel === "Annual" ? terminalLabel : undefined,
         marks: buildMarksDetailsForTerminal(terminalLabel),
@@ -1455,7 +1443,7 @@ export const submitMarks = async (req, res) => {
     );
 
     if (csError || !classSubjects?.length) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}`,
         note: "Add subjects to class using POST /api/subjects/add",
       });
@@ -1611,14 +1599,14 @@ export const submitMarks = async (req, res) => {
     if (markRecords.length > 0) {
       // Create clean records for insertion (remove tracking fields)
       const cleanMarkRecords = markRecords.map(({ _subject_name, ...record }) => record);
-      
+
       const { error: insertError } = await supabase
         .from("marks")
         .insert(cleanMarkRecords);
 
       if (insertError) {
         console.error("Insert marks error:", insertError);
-        
+
         // Check if it's a duplicate key constraint error
         if (insertError.message && insertError.message.includes("duplicate key") && insertError.message.includes("marks_student_id_subject_id_terminal_key")) {
           // Update instead
@@ -1636,9 +1624,9 @@ export const submitMarks = async (req, res) => {
               .eq("terminal", rec.terminal);
           }
         } else {
-          return res.status(500).json({ 
+          return res.status(500).json({
             message: "Failed to save marks",
-            error: insertError.message 
+            error: insertError.message
           });
         }
       }
@@ -1667,9 +1655,9 @@ export const submitMarks = async (req, res) => {
     });
   } catch (err) {
     console.error("Submit marks error:", err);
-    res.status(err.status || 500).json({ 
+    res.status(err.status || 500).json({
       message: err.status ? err.message : "Server error",
-      error: err.status ? undefined : err.message 
+      error: err.status ? undefined : err.message
     });
   }
 };
@@ -1689,21 +1677,17 @@ export const publishResult = async (req, res) => {
       });
     }
 
-    // Get all students in class (and section if provided)
-    let studentsQuery = supabase
+    // Section-independent: get all students in class across all sections
+    const studentsQuery = supabase
       .from("students")
       .select("id, name, class, section, roll_no, status")
       .eq("class", className);
 
-    if (section) {
-      studentsQuery = studentsQuery.eq("section", section);
-    }
-
     const { data: students, error: studentsError } = await studentsQuery.order("roll_no");
 
     if (studentsError || !students?.length) {
-      return res.status(404).json({ 
-        message: `No students found for class "${className}"${section ? ` section "${section}"` : ""}` 
+      return res.status(404).json({
+        message: `No students found for class "${className}"`
       });
     }
 
@@ -1714,7 +1698,7 @@ export const publishResult = async (req, res) => {
 
     if (!activeStudents.length) {
       return res.status(404).json({
-        message: `No active students found for class "${className}"${section ? ` section "${section}"` : ""}`,
+        message: `No active students found for class "${className}"`,
       });
     }
 
@@ -1756,7 +1740,7 @@ export const publishResult = async (req, res) => {
             )
           `)
         .eq("class", className);
-      
+
       const fallbackResult = await fallbackQuery;
       if (fallbackResult.data && fallbackResult.data.length > 0) {
         classSubjects = fallbackResult.data;
@@ -1769,20 +1753,20 @@ export const publishResult = async (req, res) => {
       console.error("Error fetching class subjects:", csError);
       // If error is about section column, provide helpful message
       if (csError.message && csError.message.includes("section")) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "Database schema issue: section column may not exist in class_subjects table",
           error: csError.message,
           note: "Please run migration 004_add_section_to_class_subjects.sql or add subjects without section filter"
         });
       }
-      return res.status(500).json({ 
+      return res.status(500).json({
         message: "Failed to fetch subjects for this class",
-        error: csError.message 
+        error: csError.message
       });
     }
 
     if (!classSubjects || classSubjects.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: `No subjects found for class "${className}"${section ? ` section "${section}"` : ""}`,
         note: "Make sure subjects are added to this class using POST /api/subjects/add"
       });
@@ -1913,15 +1897,15 @@ export const publishResult = async (req, res) => {
           totalObtained += (m.external_marks || 0) + (m.internal_marks || 0);
         });
 
-        const percentage = totalMaxMarks > 0 
+        const percentage = totalMaxMarks > 0
           ? parseFloat(((totalObtained / totalMaxMarks) * 100).toFixed(2))
           : 0;
-        
-        const division = 
-          percentage >= 60 ? "First" 
-          : percentage >= 45 ? "Second" 
-          : percentage >= 33 ? "Third" 
-          : "Fail";
+
+        const division =
+          percentage >= 60 ? "First"
+            : percentage >= 45 ? "Second"
+              : percentage >= 30 ? "Third"
+                : "Fail";
 
         studentResults.push({
           student_id: student.id,
@@ -1937,29 +1921,15 @@ export const publishResult = async (req, res) => {
       }
     }
 
-    // Sort and rank within each section independently
+    // Class-wide ranking across all students in the class
     const rankMap = {};
-    const resultsBySection = new Map();
+    const sortedClassResults = [...studentResults].sort(
+      (a, b) => b.percentage - a.percentage
+    );
 
-    studentResults.forEach((result) => {
-      const sectionKey = String(result.section || "All").trim() || "All";
-      if (!resultsBySection.has(sectionKey)) {
-        resultsBySection.set(sectionKey, []);
-      }
-      resultsBySection.get(sectionKey).push(result);
+    sortedClassResults.forEach((result, index) => {
+      rankMap[result.student_id] = index + 1;
     });
-
-    for (const [, sectionResults] of resultsBySection) {
-      const sortedSectionResults = [...sectionResults].sort(
-        (a, b) => b.percentage - a.percentage
-      );
-
-      sortedSectionResults.forEach((result, index) => {
-        if (index < 10) {
-          rankMap[result.student_id] = index + 1;
-        }
-      });
-    }
 
     // Second pass: Save results with ranks
     const publishedResults = [];
@@ -2010,9 +1980,9 @@ export const publishResult = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Results published for ${publishedResults.length} student(s)`,
+      message: `Results published successfully for class "${className}" (${publishedResults.length} students across all sections).`,
       class: className,
-      section: section || "All",
+      section: "All",
       terminal,
       published: publishedResults.length,
       total_students: activeStudents.length,
@@ -2021,9 +1991,9 @@ export const publishResult = async (req, res) => {
     });
   } catch (err) {
     console.error("Publish result error:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       message: "Server error",
-      error: err.message 
+      error: err.message
     });
   }
 };
@@ -2061,12 +2031,9 @@ export const getMarks = async (req, res) => {
 
     const cachedMarksPayload = getCachedReadResponse(marksCacheKey);
     if (cachedMarksPayload) {
-      setReadCacheHeaders({
-        res,
-        ttlMs: MARKS_BY_CLASS_CACHE_TTL_MS,
-        cacheHit: true,
-        visibility: "private",
-      });
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
       return res.json(cachedMarksPayload);
     }
 
@@ -2099,8 +2066,8 @@ export const getMarks = async (req, res) => {
     }
 
     if (studentsError || !students?.length) {
-      return res.status(404).json({ 
-        message: `No students found for class "${className}"${section ? ` section "${section}"` : ""}` 
+      return res.status(404).json({
+        message: `No students found for class "${className}"${section ? ` section "${section}"` : ""}`
       });
     }
 
@@ -2139,8 +2106,8 @@ export const getMarks = async (req, res) => {
       .order("sequence", { ascending: true });
 
     if (csError || !classSubjects?.length) {
-      return res.status(404).json({ 
-        message: "No subjects found for this class" 
+      return res.status(404).json({
+        message: "No subjects found for this class"
       });
     }
 
@@ -2162,9 +2129,9 @@ export const getMarks = async (req, res) => {
       .in("subject_id", subjectIds);
 
     if (marksError) {
-      return res.status(500).json({ 
+      return res.status(500).json({
         message: "Failed to fetch marks",
-        error: marksError.message 
+        error: marksError.message
       });
     }
 
@@ -2246,19 +2213,16 @@ export const getMarks = async (req, res) => {
       terminal: requestedTerminalRaw || cachedOrBuiltPayload.terminal,
     };
 
-    setReadCacheHeaders({
-      res,
-      ttlMs: MARKS_BY_CLASS_CACHE_TTL_MS,
-      cacheHit: false,
-      visibility: "private",
-    });
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
 
     return res.json(responsePayload);
   } catch (err) {
     console.error("Get marks error:", err);
-    res.status(err.status || 500).json({ 
+    res.status(err.status || 500).json({
       message: err.status ? err.message : "Server error",
-      error: err.status ? undefined : err.message 
+      error: err.status ? undefined : err.message
     });
   }
 };

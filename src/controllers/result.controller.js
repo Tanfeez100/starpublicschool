@@ -451,12 +451,21 @@ const fetchStudentByClassRoll = async ({
     return numericData;
   }
 
-  const { data: numericFallbackData, error: numericFallbackError } = await supabase
+  let fallbackQuery = supabase
     .from("students")
     .select("id, name, father_name, mother_name, class, section, roll_no, academic_year, status, created_at, photo_url")
     .eq("class", className)
-    .eq("roll_no", numericRoll)
-    .eq("status", "active")
+    .eq("roll_no", numericRoll);
+
+  if (section) {
+    fallbackQuery = fallbackQuery.ilike("section", section);
+  }
+
+  if (academicYears?.length) {
+    fallbackQuery = fallbackQuery.in("academic_year", academicYears);
+  }
+
+  const { data: numericFallbackData, error: numericFallbackError } = await fallbackQuery
     .order("academic_year", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(5);
@@ -582,6 +591,11 @@ export const getResult = async (req, res) => {
 
     const findPublishedStudent = async (candidates) => {
       for (const candidate of candidates) {
+        if (section) {
+          const candSec = toSafeString(candidate?.section).toUpperCase();
+          if (candSec !== toSafeString(section).toUpperCase()) continue;
+        }
+
         const { data: candidateSummary, error: candidateError } = await supabase
           .from("result_summary")
           .select("status, total_marks, total_obtained, percentage, division, rank, calculated_at")
@@ -595,66 +609,17 @@ export const getResult = async (req, res) => {
         }
       }
 
-      return candidates[0];
+      return null;
     };
 
     const student = await findPublishedStudent(students);
-
-    let resolvedStudent = student;
-    if (!resolvedStudent) {
-      const { data: publishedStudentRows } = await supabase
-        .from("result_summary")
-        .select(`
-          calculated_at,
-          status,
-          terminal,
-          students!inner (
-            id,
-            name,
-            father_name,
-            mother_name,
-            class,
-            section,
-            roll_no,
-            academic_year,
-            status,
-            photo_url
-          )
-        `)
-        .eq("terminal", currentTermLabel)
-        .eq("status", "Published")
-        .eq("students.class", className)
-        .eq("students.status", "active")
-        .eq("students.roll_no", Number(rollInput))
-        .limit(5);
-
-      const fallbackMatch = (publishedStudentRows || []).find((row) => {
-        const rowStudent = row?.students;
-        if (!rowStudent) return false;
-        if (section && String(rowStudent.section || "").trim() !== String(section).trim()) return false;
-        if (academicYears?.length) {
-          return academicYears.includes(String(rowStudent.academic_year || "").trim());
-        }
-        return true;
+    if (!student) {
+      return res.status(404).json({
+        message: "Result not published yet",
       });
-
-      if (fallbackMatch?.students) {
-        resolvedStudent = {
-          id: fallbackMatch.students.id,
-          name: fallbackMatch.students.name,
-          father_name: fallbackMatch.students.father_name || null,
-          mother_name: fallbackMatch.students.mother_name || null,
-          class: fallbackMatch.students.class,
-          section: fallbackMatch.students.section,
-          roll_no: fallbackMatch.students.roll_no,
-          academic_year: fallbackMatch.students.academic_year || null,
-          status: fallbackMatch.students.status || null,
-          photo_url: fallbackMatch.students.photo_url || null,
-        };
-      }
     }
 
-    const finalStudent = resolvedStudent;
+    const finalStudent = student;
 
     const { data: publishedSummary, error: publishedError } = await supabase
       .from("result_summary")
