@@ -151,7 +151,7 @@ const toNumberOrDefault = (value, fallbackValue) => {
 const divisionFromPercentage = (percentage) => {
   if (percentage >= 60) return "First";
   if (percentage >= 45) return "Second";
-  if (percentage >= 33) return "Third";
+  if (percentage >= 30) return "Third";
   return "Fail";
 };
 
@@ -367,9 +367,9 @@ const buildTermRowView = (row, subjectMap) => {
   const fullMarksInternal = drawingSubject
     ? 0
     : toNumberOrDefault(
-        row?.full_marks_internal ?? subjectMeta?.max_internal_marks,
-        defaultInternalFull
-      );
+      row?.full_marks_internal ?? subjectMeta?.max_internal_marks,
+      defaultInternalFull
+    );
 
   const obtained =
     (externalMarks.isNumeric ? externalMarks.numericValue : 0) +
@@ -447,9 +447,9 @@ const fetchStudentByClassRoll = async ({
     throw new Error(`Failed to fetch student: ${numericError.message}`);
   }
 
-    if (numericData?.length) {
-      return numericData;
-    }
+  if (numericData?.length) {
+    return numericData;
+  }
 
   const { data: numericFallbackData, error: numericFallbackError } = await supabase
     .from("students")
