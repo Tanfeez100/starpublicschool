@@ -2343,3 +2343,266 @@ export const getMarks = async (req, res) => {
   }
 };
 
+
+
+/**
+ * Fast-Track Bulk Import: Students + Marks in 1 Class-wise Step
+ * Specifically designed for fast result onboarding without requiring manual student form submissions.
+ */
+export const bulkImportClassMarksController = async (req, res) => {
+  try {
+    const {
+      className,
+      section = "A",
+      terminal = "First",
+      academicYear = "2026-27",
+      examTitle = "FIRST TERMINAL EXAMINATION RESULT - 2026",
+      subjects = [],
+      students = []
+    } = req.body;
+
+    if (!className || !terminal || !Array.isArray(students) || students.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "className, terminal, and students array are required."
+      });
+    }
+
+    const normClass = String(className).replace(/^Class\s+/i, "").trim();
+    const normTerminal = String(terminal).trim();
+    const effectiveSection = String(section || "A").replace(/^Section\s+/i, "").trim() || "A";
+
+    // 1. Prepare / Ensure Subjects in database
+    const subjectCache = {};
+    const { data: existingSubjects } = await supabase
+      .from("subjects")
+      .select("id, name, code");
+
+    (existingSubjects || []).forEach((s) => {
+      if (s.name) subjectCache[s.name.trim().toLowerCase()] = s;
+      if (s.code) subjectCache[s.code.trim().toLowerCase()] = s;
+    });
+
+    const resolvedSubjects = [];
+    for (const sub of subjects) {
+      const subName = (typeof sub === "string" ? sub : sub.name || "").trim();
+      const fullMarks = Number(sub.fullMarks || sub.full_marks) || 100;
+      const passMarks = Number(sub.passMarks || sub.pass_marks) || 30;
+      if (!subName) continue;
+
+      let match = subjectCache[subName.toLowerCase()];
+      if (!match) {
+        // Insert new subject
+        const code = subName.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase() || "SUB";
+        const { data: newSub, error: subErr } = await supabase
+          .from("subjects")
+          .insert([{ name: subName, code }])
+          .select("id, name, code")
+          .single();
+        if (!subErr && newSub) {
+          match = newSub;
+          subjectCache[subName.toLowerCase()] = newSub;
+        }
+      }
+
+      if (match?.id) {
+        resolvedSubjects.push({
+          id: match.id,
+          name: subName,
+          fullMarks,
+          passMarks
+        });
+      }
+    }
+
+    // 2. Fetch existing students in this class/section to avoid duplicates
+    const { data: existingClassStudents } = await supabase
+      .from("students")
+      .select("id, name, father_name, class, section, roll_no")
+      .or(`class.eq.${normClass},class.eq.Class ${normClass}`);
+
+    const studentRollMap = {};
+    (existingClassStudents || []).forEach((st) => {
+      const rollKey = `${String(st.roll_no).trim()}_${String(st.section || "A").trim().toUpperCase()}`;
+      studentRollMap[rollKey] = st;
+    });
+
+    // 3. Process each student row: Upsert Student, Upsert Marks, Calculate Summary
+    const importedResults = [];
+    const studentScoreTotals = [];
+
+    for (const s of students) {
+      const rollNo = parseInt(s.rollNo ?? s.roll_no ?? s.roll, 10);
+      const studentName = String(s.name || s.studentName || s.student_name || "").trim();
+      const fatherName = String(s.fatherName || s.father_name || "").trim();
+      const marksObj = s.marks || {};
+
+      if (!rollNo || !studentName) continue;
+
+      const rollKey = `${rollNo}_${effectiveSection.toUpperCase()}`;
+      let studentRecord = studentRollMap[rollKey];
+
+      if (!studentRecord) {
+        // Create new minimal student
+        const { data: newStudent, error: createErr } = await supabase
+          .from("students")
+          .insert([
+            {
+              name: studentName,
+              father_name: fatherName,
+              class: normClass,
+              section: effectiveSection,
+              roll_no: rollNo,
+              academic_year: academicYear,
+              status: "active",
+              left_date: null
+            }
+          ])
+          .select("id, name, father_name, class, section, roll_no")
+          .single();
+
+        if (createErr) {
+          console.warn(`Could not create student Roll #${rollNo}:`, createErr.message);
+          continue;
+        }
+        studentRecord = newStudent;
+        studentRollMap[rollKey] = newStudent;
+      } else {
+        // Update father_name if provided and previously missing
+        if (fatherName && !studentRecord.father_name) {
+          await supabase
+            .from("students")
+            .update({ father_name: fatherName })
+            .eq("id", studentRecord.id);
+          studentRecord.father_name = fatherName;
+        }
+      }
+
+      // Record Marks for each resolved subject
+      let totalMaxMarks = 0;
+      let totalObtained = 0;
+      let hasFailedSubject = false;
+      const studentSubjectMarks = [];
+
+      for (const sub of resolvedSubjects) {
+        totalMaxMarks += sub.fullMarks;
+        const rawMark = marksObj[sub.name] ?? marksObj[sub.name.toLowerCase()] ?? marksObj[sub.id];
+        let markValue = 0;
+        let isAbsent = false;
+
+        if (rawMark === "AB" || rawMark === "Absent" || rawMark === "A") {
+          isAbsent = true;
+          hasFailedSubject = true;
+        } else {
+          markValue = Number(rawMark) || 0;
+          if (markValue < sub.passMarks) hasFailedSubject = true;
+        }
+        totalObtained += markValue;
+
+        studentSubjectMarks.push({
+          subject_name: sub.name,
+          full_marks: sub.fullMarks,
+          pass_marks: sub.passMarks,
+          marks_obtained: isAbsent ? "AB" : markValue
+        });
+
+        // Upsert into Supabase marks table
+        await supabase
+          .from("marks")
+          .upsert(
+            {
+              student_id: studentRecord.id,
+              subject_id: sub.id,
+              terminal: normTerminal,
+              external_marks: isAbsent ? 0 : markValue,
+              total_marks: isAbsent ? 0 : markValue,
+              status: "PUBLISHED",
+              updated_at: new Date().toISOString()
+            },
+            { onConflict: "student_id,subject_id,terminal" }
+          );
+      }
+
+      // Calculate percentage & division
+      const percentage = totalMaxMarks > 0
+        ? parseFloat(((totalObtained / totalMaxMarks) * 100).toFixed(2))
+        : 0;
+
+      let division = "Failed";
+      if (!hasFailedSubject) {
+        if (percentage >= 60) division = "First";
+        else if (percentage >= 45) division = "Second";
+        else if (percentage >= 33) division = "Third";
+      }
+
+      studentScoreTotals.push({
+        student_id: studentRecord.id,
+        totalObtained,
+        percentage
+      });
+
+      importedResults.push({
+        student_id: studentRecord.id,
+        name: studentRecord.name,
+        father_name: studentRecord.father_name || fatherName,
+        class: normClass,
+        section: effectiveSection,
+        roll_no: rollNo,
+        subjects: studentSubjectMarks,
+        total_marks: totalMaxMarks,
+        total_obtained: totalObtained,
+        percentage,
+        division,
+        exam_title: examTitle
+      });
+    }
+
+    // Rank calculation (highest percentage gets rank 1)
+    studentScoreTotals.sort((a, b) => b.percentage - a.percentage);
+    const rankMap = {};
+    studentScoreTotals.forEach((item, index) => {
+      rankMap[item.student_id] = index + 1;
+    });
+
+    // Upsert Result Summaries
+    for (const resItem of importedResults) {
+      const studentRank = rankMap[resItem.student_id] || 1;
+      resItem.rank = studentRank;
+
+      await supabase
+        .from("result_summary")
+        .upsert(
+          {
+            student_id: resItem.student_id,
+            terminal: normTerminal,
+            total_marks: resItem.total_marks,
+            total_obtained: resItem.total_obtained,
+            percentage: resItem.percentage,
+            division: resItem.division,
+            rank: studentRank,
+            status: "Published",
+            calculated_at: new Date().toISOString()
+          },
+          { onConflict: "student_id,terminal" }
+        );
+    }
+
+    return res.json({
+      success: true,
+      message: `Successfully imported and published ${importedResults.length} students with marks for ${normTerminal} Terminal.`,
+      importedCount: importedResults.length,
+      subjectsCount: resolvedSubjects.length,
+      class: normClass,
+      section: effectiveSection,
+      terminal: normTerminal,
+      results: importedResults
+    });
+  } catch (error) {
+    console.error("Bulk class import marks error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during bulk class import",
+      error: error.message
+    });
+  }
+};
