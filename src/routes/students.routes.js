@@ -398,31 +398,87 @@ router.get("/all", adminOrTeacher, async (req, res) => {
       });
     }
 
-    const formattedStudents = (students || []).map((student) => ({
-      ID: student.id || "",
-      Name: student.name || "",
-      Father: student.father_name || "",
-      Mother: student.mother_name || "",
-      Gender: student.gender || "",
-      Class: student.class || "",
-      Section: student.section || "",
-      Roll: student.roll_no || "",
-      AcademicYear: student.academic_year || "",
-      Status: student.status || "",
-      LeftDate: student.left_date || "",
-      Mobile: student.mobile || "",
-      Aadhaar: student.aadhaar_card || "",
-      PenNumber: student.pen_number || "",
-      Username: student.username || "",
-      DateOfBirth: student.date_of_birth || "",
-      AdmissionNumber: student.admission_number || "",
-      AdmissionDate: student.admission_date || "",
-      PhotoUrl: student.photo_url || "",
-      Address: student.address || "",
-      Transport: student.uses_transport
-        ? student.transport_charge || "Yes"
-        : "No",
-    }));
+    const studentIds = (students || []).map((s) => s.id);
+    const previousDuesMap = {};
+    const fallbackDuesMap = {};
+
+    if (studentIds.length > 0) {
+      const { data: allDuesRows } = await supabase
+        .from("previous_dues")
+        .select("student_id, remaining_due")
+        .in("student_id", studentIds)
+        .eq("status", "pending")
+        .eq("cleared", false);
+
+      (allDuesRows || []).forEach((d) => {
+        previousDuesMap[d.student_id] =
+          (previousDuesMap[d.student_id] || 0) +
+          parseFloat(d.remaining_due || 0);
+      });
+
+      const studentsWithoutDues = studentIds.filter((id) => !previousDuesMap[id]);
+      if (studentsWithoutDues.length > 0) {
+        const { data: bills } = await supabase
+          .from("fee_bills")
+          .select("id, student_id, total_amount")
+          .in("student_id", studentsWithoutDues);
+
+        if (bills && bills.length > 0) {
+          const billIds = bills.map((b) => b.id);
+          const { data: payments } = await supabase
+            .from("fee_payments")
+            .select("bill_id, amount_paid")
+            .in("bill_id", billIds);
+
+          const paidMap = {};
+          (payments || []).forEach((p) => {
+            paidMap[p.bill_id] = (paidMap[p.bill_id] || 0) + parseFloat(p.amount_paid || 0);
+          });
+
+          bills.forEach((b) => {
+            const outstanding = Math.max(
+              0,
+              parseFloat(b.total_amount || 0) - (paidMap[b.id] || 0)
+            );
+            fallbackDuesMap[b.student_id] =
+              (fallbackDuesMap[b.student_id] || 0) + outstanding;
+          });
+        }
+      }
+    }
+
+    const formattedStudents = (students || []).map((student) => {
+      const dueAmount = previousDuesMap[student.id] || fallbackDuesMap[student.id] || 0;
+      const feeStatus = dueAmount > 0 ? `₹${Math.round(dueAmount).toLocaleString("en-IN")} Due` : "Cleared";
+
+      return {
+        ID: student.id || "",
+        Name: student.name || "",
+        Father: student.father_name || "",
+        Mother: student.mother_name || "",
+        Gender: student.gender || "",
+        Class: student.class || "",
+        Section: student.section || "",
+        Roll: student.roll_no || "",
+        AcademicYear: student.academic_year || "",
+        Status: student.status || "",
+        LeftDate: student.left_date || "",
+        Mobile: student.mobile || "",
+        PreviousDue: dueAmount,
+        FeeStatus: feeStatus,
+        Aadhaar: student.aadhaar_card || "",
+        PenNumber: student.pen_number || "",
+        Username: student.username || "",
+        DateOfBirth: student.date_of_birth || "",
+        AdmissionNumber: student.admission_number || "",
+        AdmissionDate: student.admission_date || "",
+        PhotoUrl: student.photo_url || "",
+        Address: student.address || "",
+        Transport: student.uses_transport
+          ? student.transport_charge || "Yes"
+          : "No",
+      };
+    });
 
     res.json({
       success: true,
