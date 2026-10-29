@@ -2345,6 +2345,36 @@ export const getMarks = async (req, res) => {
 
 
 
+const normalizeSubjectKey = (name) => {
+  if (!name) return "";
+  const clean = String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (clean === "gk" || clean === "generalknowledge") return "gk";
+  if (clean === "evs" || clean === "environmentalstudies" || clean === "environment") return "evs";
+  if (clean === "sst" || clean === "socialscience" || clean === "socialstudies") return "sst";
+  if (clean === "math" || clean === "maths" || clean === "mathematics") return "math";
+  if (clean === "sci" || clean === "science") return "science";
+  if (clean === "eng" || clean === "english") return "english";
+  if (clean === "hin" || clean === "hindi") return "hindi";
+  if (clean === "comp" || clean === "computer" || clean === "comptab") return "comp";
+  if (clean === "draw" || clean === "drawing" || clean === "art") return "drawing";
+  if (clean === "sanskrit" || clean === "sans") return "sanskrit";
+  if (clean === "urdu") return "urdu";
+  return clean;
+};
+
+const getStudentSubjectMark = (marksObj, subjectName, subjectId) => {
+  if (!marksObj || typeof marksObj !== "object") return undefined;
+  if (marksObj[subjectName] !== undefined) return marksObj[subjectName];
+  if (marksObj[subjectName.toLowerCase()] !== undefined) return marksObj[subjectName.toLowerCase()];
+  if (subjectId && marksObj[subjectId] !== undefined) return marksObj[subjectId];
+
+  const targetKey = normalizeSubjectKey(subjectName);
+  for (const [k, v] of Object.entries(marksObj)) {
+    if (normalizeSubjectKey(k) === targetKey) return v;
+  }
+  return undefined;
+};
+
 /**
  * Fast-Track Bulk Import: Students + Marks in 1 Class-wise Step
  * Specifically designed for fast result onboarding without requiring manual student form submissions.
@@ -2379,8 +2409,14 @@ export const bulkImportClassMarksController = async (req, res) => {
       .select("id, name, code");
 
     (existingSubjects || []).forEach((s) => {
-      if (s.name) subjectCache[s.name.trim().toLowerCase()] = s;
-      if (s.code) subjectCache[s.code.trim().toLowerCase()] = s;
+      if (s.name) {
+        subjectCache[s.name.trim().toLowerCase()] = s;
+        subjectCache[normalizeSubjectKey(s.name)] = s;
+      }
+      if (s.code) {
+        subjectCache[s.code.trim().toLowerCase()] = s;
+        subjectCache[normalizeSubjectKey(s.code)] = s;
+      }
     });
 
     const resolvedSubjects = [];
@@ -2390,7 +2426,8 @@ export const bulkImportClassMarksController = async (req, res) => {
       const passMarks = Number(sub.passMarks || sub.pass_marks) || 30;
       if (!subName) continue;
 
-      let match = subjectCache[subName.toLowerCase()];
+      const normKey = normalizeSubjectKey(subName);
+      let match = subjectCache[subName.toLowerCase()] || subjectCache[normKey];
       if (!match) {
         // Insert new subject
         const code = subName.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase() || "SUB";
@@ -2402,6 +2439,7 @@ export const bulkImportClassMarksController = async (req, res) => {
         if (!subErr && newSub) {
           match = newSub;
           subjectCache[subName.toLowerCase()] = newSub;
+          subjectCache[normKey] = newSub;
         }
       }
 
@@ -2487,7 +2525,7 @@ export const bulkImportClassMarksController = async (req, res) => {
 
       for (const sub of resolvedSubjects) {
         totalMaxMarks += sub.fullMarks;
-        const rawMark = marksObj[sub.name] ?? marksObj[sub.name.toLowerCase()] ?? marksObj[sub.id];
+        const rawMark = getStudentSubjectMark(marksObj, sub.name, sub.id);
         let markValue = 0;
         let isAbsent = false;
 
