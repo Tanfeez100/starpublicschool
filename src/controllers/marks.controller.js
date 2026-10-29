@@ -2430,6 +2430,7 @@ export const bulkImportClassMarksController = async (req, res) => {
     // 3. Process each student row: Upsert Student, Upsert Marks, Calculate Summary
     const importedResults = [];
     const studentScoreTotals = [];
+    const allMarkRecords = [];
 
     for (const s of students) {
       const rollNo = parseInt(s.rollNo ?? s.roll_no ?? s.roll, 10);
@@ -2506,24 +2507,15 @@ export const bulkImportClassMarksController = async (req, res) => {
           marks_obtained: isAbsent ? "AB" : markValue
         });
 
-        const { error: upsertErr } = await supabase
-          .from("marks")
-          .upsert(
-            {
-              student_id: studentRecord.id,
-              subject_id: sub.id,
-              terminal: normTerminal,
-              external_marks: isAbsent ? 0 : markValue,
-              internal_marks: 0,
-              status: "PUBLISHED",
-              updated_at: new Date().toISOString()
-            },
-            { onConflict: "student_id,subject_id,terminal" }
-          );
-
-        if (upsertErr) {
-          console.warn(`Could not save mark for student ${studentRecord.name} sub ${sub.name}:`, upsertErr.message);
-        }
+        allMarkRecords.push({
+          student_id: studentRecord.id,
+          subject_id: sub.id,
+          terminal: normTerminal,
+          external_marks: isAbsent ? 0 : markValue,
+          internal_marks: 0,
+          status: "PUBLISHED",
+          updated_at: new Date().toISOString()
+        });
       }
 
       // Calculate percentage & division
@@ -2567,27 +2559,41 @@ export const bulkImportClassMarksController = async (req, res) => {
       rankMap[item.student_id] = index + 1;
     });
 
-    // Upsert Result Summaries
-    for (const resItem of importedResults) {
+    // 4. Batch upsert all marks in high-speed chunks (avoids 100+ sequential requests and browser timeouts)
+    for (let i = 0; i < allMarkRecords.length; i += 200) {
+      const chunk = allMarkRecords.slice(i, i + 200);
+      const { error: batchMarksErr } = await supabase
+        .from("marks")
+        .upsert(chunk, { onConflict: "student_id,subject_id,terminal" });
+      if (batchMarksErr) {
+        console.warn("Batch marks upsert error:", batchMarksErr.message);
+      }
+    }
+
+    // 5. Batch upsert Result Summaries in 1 fast query
+    const allSummaries = importedResults.map((resItem) => {
       const studentRank = rankMap[resItem.student_id] || 1;
       resItem.rank = studentRank;
+      return {
+        student_id: resItem.student_id,
+        terminal: normTerminal,
+        total_marks: resItem.total_marks,
+        total_obtained: resItem.total_obtained,
+        percentage: resItem.percentage,
+        division: resItem.division,
+        rank: studentRank,
+        status: "Published",
+        calculated_at: new Date().toISOString()
+      };
+    });
 
-      await supabase
+    if (allSummaries.length > 0) {
+      const { error: batchSumErr } = await supabase
         .from("result_summary")
-        .upsert(
-          {
-            student_id: resItem.student_id,
-            terminal: normTerminal,
-            total_marks: resItem.total_marks,
-            total_obtained: resItem.total_obtained,
-            percentage: resItem.percentage,
-            division: resItem.division,
-            rank: studentRank,
-            status: "Published",
-            calculated_at: new Date().toISOString()
-          },
-          { onConflict: "student_id,terminal" }
-        );
+        .upsert(allSummaries, { onConflict: "student_id,terminal" });
+      if (batchSumErr) {
+        console.warn("Batch result_summary upsert error:", batchSumErr.message);
+      }
     }
 
     return res.json({
