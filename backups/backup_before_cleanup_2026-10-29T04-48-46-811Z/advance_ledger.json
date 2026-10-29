@@ -1,0 +1,47 @@
+[
+  {
+    "id": "f5636ebc-a5b0-49a4-83df-f034112a0a49",
+    "student_id": "a9edeff6-fc4b-44a6-ab61-b8252ac7b793",
+    "bill_id": "7a9da8ea-6364-4227-904c-28c49b3cd3c2",
+    "used_for_bill_id": "269839e0-0758-4b5a-975c-4558e9c21aee",
+    "amount": 700,
+    "payment_mode": "cash",
+    "payment_date": "2026-10-25",
+    "month": "2026-11",
+    "year": 2026,
+    "status": "used",
+    "description": "Advance from overpayment",
+    "created_at": "2026-10-25T07:40:37.257279+00:00",
+    "used_at": "2026-10-25T07:43:25.069+00:00"
+  },
+  {
+    "id": "d85e550e-3168-4751-8c7a-4bb50a04e346",
+    "student_id": "8b619167-8449-40f7-b0ad-f024da8d79e5",
+    "bill_id": "3aac6341-1329-4e9c-ab8c-1fc03a1841c6",
+    "used_for_bill_id": null,
+    "amount": 2100,
+    "payment_mode": "cash",
+    "payment_date": "2026-10-25",
+    "month": "2026-12",
+    "year": 2026,
+    "status": "active",
+    "description": "Advance from overpayment",
+    "created_at": "2026-10-25T12:14:14.546946+00:00",
+    "used_at": null
+  },
+  {
+    "id": "b956c250-8e14-419a-8c91-e3ecf5da2001",
+    "student_id": "f8a74172-e4fa-4f18-9550-6d31e58e445c",
+    "bill_id": "27308a13-fa85-4998-a5e1-df82ed8c504b",
+    "used_for_bill_id": "284e2736-5f2e-42d0-814b-5bd7b0724027",
+    "amount": 100,
+    "payment_mode": "cash",
+    "payment_date": "2026-10-25",
+    "month": "2026-12",
+    "year": 2026,
+    "status": "used",
+    "description": "Advance from overpayment",
+    "created_at": "2026-10-25T11:24:50.992226+00:00",
+    "used_at": "2026-10-25T12:17:51.4+00:00"
+  }
+]

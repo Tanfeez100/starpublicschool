@@ -1,0 +1,19 @@
+[
+  {
+    "id": "c51d95d8-a105-4a82-937d-a5f28a846bcb",
+    "teacher_id": "4cc6e818-5dec-4707-8675-ef71bc2f13ca",
+    "leave_type": "Sick Leave",
+    "from_date": "2026-10-26",
+    "to_date": "2026-10-26",
+    "reason": "Sick",
+    "status": "pending",
+    "admin_remarks": null,
+    "decided_by": null,
+    "decided_at": null,
+    "created_at": "2026-10-26T18:36:24.518337+00:00",
+    "updated_at": "2026-10-26T18:36:24.518337+00:00",
+    "created_by": "4cc6e818-5dec-4707-8675-ef71bc2f13ca",
+    "updated_by": "4cc6e818-5dec-4707-8675-ef71bc2f13ca",
+    "deleted_at": null
+  }
+]

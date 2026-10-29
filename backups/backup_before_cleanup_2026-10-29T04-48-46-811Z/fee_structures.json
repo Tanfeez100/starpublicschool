@@ -1,0 +1,86 @@
+[
+  {
+    "id": "b03e0628-4b3e-4ce1-935c-132d5fad9563",
+    "class": "1",
+    "section": null,
+    "fee_name": "Tuition Fee",
+    "fee_amount": 1,
+    "is_optional": false,
+    "period": "monthly",
+    "late_fine_enabled": false,
+    "created_at": "2026-05-30T20:06:35.703742+00:00",
+    "updated_at": "2026-05-30T20:06:35.703742+00:00"
+  },
+  {
+    "id": "77e610e6-c35a-472e-a0a1-abd2d60de29b",
+    "class": "2",
+    "section": null,
+    "fee_name": "Tuition Fee",
+    "fee_amount": 500,
+    "is_optional": false,
+    "period": "monthly",
+    "late_fine_enabled": false,
+    "created_at": "2026-06-15T12:44:55.826326+00:00",
+    "updated_at": "2026-06-15T12:44:55.826326+00:00"
+  },
+  {
+    "id": "921629e7-ae00-461c-86c4-08173cf9126c",
+    "class": "2",
+    "section": null,
+    "fee_name": "Exam Fee",
+    "fee_amount": 200,
+    "is_optional": true,
+    "period": "monthly",
+    "late_fine_enabled": false,
+    "created_at": "2026-06-15T12:44:55.826326+00:00",
+    "updated_at": "2026-06-15T12:44:55.826326+00:00"
+  },
+  {
+    "id": "1d50b09a-57cb-4972-8820-26a060441ca7",
+    "class": "2",
+    "section": null,
+    "fee_name": "Computer Fee",
+    "fee_amount": 200,
+    "is_optional": true,
+    "period": "monthly",
+    "late_fine_enabled": false,
+    "created_at": "2026-06-15T12:44:55.826326+00:00",
+    "updated_at": "2026-06-15T12:44:55.826326+00:00"
+  },
+  {
+    "id": "1eed44f6-6539-490d-9e1d-d1059a92d121",
+    "class": "LKG",
+    "section": null,
+    "fee_name": "Tuition Fee",
+    "fee_amount": 400,
+    "is_optional": false,
+    "period": "monthly",
+    "late_fine_enabled": false,
+    "created_at": "2026-06-28T02:11:27.972795+00:00",
+    "updated_at": "2026-06-28T02:11:27.972795+00:00"
+  },
+  {
+    "id": "1d514e36-afc0-4c0f-ba8a-e0c6d2f1e731",
+    "class": "LKG",
+    "section": null,
+    "fee_name": "Exam Fee",
+    "fee_amount": 200,
+    "is_optional": true,
+    "period": "monthly",
+    "late_fine_enabled": false,
+    "created_at": "2026-06-28T02:11:27.972795+00:00",
+    "updated_at": "2026-06-28T02:11:27.972795+00:00"
+  },
+  {
+    "id": "2b21753e-0e30-4591-83e6-7b761e0881fb",
+    "class": "LKG",
+    "section": null,
+    "fee_name": "Annual Fee",
+    "fee_amount": 500,
+    "is_optional": true,
+    "period": "yearly",
+    "late_fine_enabled": false,
+    "created_at": "2026-06-28T02:11:27.972795+00:00",
+    "updated_at": "2026-06-28T02:11:27.972795+00:00"
+  }
+]

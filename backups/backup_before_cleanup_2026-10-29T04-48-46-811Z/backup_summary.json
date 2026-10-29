@@ -1,0 +1,115 @@
+{
+  "timestamp": "2026-10-29T04:48:46.814Z",
+  "supabaseUrl": "https://ygeofofbsnoytuoffbah.supabase.co",
+  "tables": {
+    "students": {
+      "status": "success",
+      "count": 112
+    },
+    "student_auth": {
+      "status": "success",
+      "count": 5
+    },
+    "student_leave_requests": {
+      "status": "success",
+      "count": 1
+    },
+    "student_notifications": {
+      "status": "success",
+      "count": 534
+    },
+    "student_push_tokens": {
+      "status": "success",
+      "count": 0
+    },
+    "attendance_records": {
+      "status": "success",
+      "count": 70
+    },
+    "marks": {
+      "status": "success",
+      "count": 63
+    },
+    "result_summary": {
+      "status": "success",
+      "count": 9
+    },
+    "fee_bills": {
+      "status": "success",
+      "count": 172
+    },
+    "fee_bill_items": {
+      "status": "success",
+      "count": 1032
+    },
+    "fee_payments": {
+      "status": "success",
+      "count": 20
+    },
+    "previous_dues": {
+      "status": "success",
+      "count": 37
+    },
+    "advance_ledger": {
+      "status": "success",
+      "count": 3
+    },
+    "month_closures": {
+      "status": "success",
+      "count": 5
+    },
+    "fee_structures": {
+      "status": "success",
+      "count": 7
+    },
+    "subjects": {
+      "status": "success",
+      "count": 13
+    },
+    "class_subjects": {
+      "status": "success",
+      "count": 12
+    },
+    "holiday_calendar": {
+      "status": "success",
+      "count": 2
+    },
+    "teacher_profiles": {
+      "status": "success",
+      "count": 2
+    },
+    "teacher_assignments": {
+      "status": "success",
+      "count": 6
+    },
+    "teacher_attendance_settings": {
+      "status": "success",
+      "count": 7
+    },
+    "teacher_attendance_records": {
+      "status": "success",
+      "count": 7
+    },
+    "teacher_leave_requests": {
+      "status": "success",
+      "count": 1
+    },
+    "teacher_attendance_audit_logs": {
+      "status": "success",
+      "count": 17
+    },
+    "teacher_notifications": {
+      "status": "success",
+      "count": 0
+    },
+    "user_sessions": {
+      "status": "success",
+      "count": 7
+    },
+    "user_roles": {
+      "status": "success",
+      "count": 10
+    }
+  },
+  "usersCount": 11
+}

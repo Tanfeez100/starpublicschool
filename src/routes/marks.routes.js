@@ -6,6 +6,7 @@ import {
   getMarks,
   getCachedResultPdfController,
   saveCachedResultPdfController,
+  bulkImportClassMarksController,
 } from "../controllers/marks.controller.js";
 import { adminOrTeacher, adminOnly } from "../middleware/auth.middleware.js";
 
@@ -26,5 +27,8 @@ router.post("/result/cached-pdf", saveCachedResultPdfController);
 
 /* PUBLISH RESULT - Admin Only */
 router.post("/publish", adminOnly, publishResult);
+
+/* FAST-TRACK BULK IMPORT - Admin & Teacher */
+router.post("/bulk-import-class", adminOrTeacher, bulkImportClassMarksController);
 
 export default router;

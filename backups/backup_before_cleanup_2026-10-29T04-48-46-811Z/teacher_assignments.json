@@ -1,0 +1,56 @@
+[
+  {
+    "teacher_id": "4cc6e818-5dec-4707-8675-ef71bc2f13ca",
+    "class": "1",
+    "section": "B",
+    "academic_year": "2026-27",
+    "created_at": "2026-06-26T14:11:17.145829+00:00",
+    "updated_at": "2026-06-26T14:11:31.390477+00:00",
+    "id": "f18de2fe-5d6f-41a2-9cbd-a242ea2218dc"
+  },
+  {
+    "teacher_id": "fb527135-0215-4871-adbd-a55d1ddf218b",
+    "class": "1",
+    "section": "A",
+    "academic_year": "2026-27",
+    "created_at": "2026-06-26T18:23:29.771996+00:00",
+    "updated_at": "2026-06-26T18:23:29.389+00:00",
+    "id": "adaf782b-da5f-4f39-a1d9-e01b8542ddda"
+  },
+  {
+    "teacher_id": "6c7b0957-4e8c-4a4d-949a-edd34b97bd49",
+    "class": "3",
+    "section": "B",
+    "academic_year": "2026-27",
+    "created_at": "2026-06-28T02:05:49.552781+00:00",
+    "updated_at": "2026-06-28T02:05:49.152+00:00",
+    "id": "f2a36d8e-adec-4ba6-baef-ef8a78b2efa4"
+  },
+  {
+    "teacher_id": "d8ee2bf4-2f96-4997-8c52-d2ed2d30a2f0",
+    "class": "LKG",
+    "section": "A",
+    "academic_year": "2026-27",
+    "created_at": "2026-06-27T12:51:47.976511+00:00",
+    "updated_at": "2026-07-01T18:43:00.630408+00:00",
+    "id": "c1f88a9c-22c1-4428-9f59-ff041e74823c"
+  },
+  {
+    "teacher_id": "4cc6e818-5dec-4707-8675-ef71bc2f13ca",
+    "class": "8",
+    "section": "A",
+    "academic_year": "2026-27",
+    "created_at": "2026-10-24T12:06:18.231453+00:00",
+    "updated_at": "2026-10-24T12:06:19.123518+00:00",
+    "id": "578bbac7-8e82-4c3c-bfc4-834058524ce0"
+  },
+  {
+    "teacher_id": "6c7b0957-4e8c-4a4d-949a-edd34b97bd49",
+    "class": "2",
+    "section": "A",
+    "academic_year": "2026-27",
+    "created_at": "2026-10-26T07:37:54.893288+00:00",
+    "updated_at": "2026-10-26T07:37:55.653+00:00",
+    "id": "038e2a79-345f-479a-86bb-5105ce0cea0f"
+  }
+]

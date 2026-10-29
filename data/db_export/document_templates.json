@@ -4,10 +4,10 @@
     "activeTemplateId": "id_card_modern_tech",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
-      "tagline": "Affiliated to State Board | Affiliation No: 2130894",
-      "address": "Main Road, Bettiah, West Champaran, Bihar - 845438",
-      "phone": "+91 98765 43210",
-      "email": "info@starpublicschool.com",
+      "tagline": "Meghwal mathia Bazar, West Champaran, Bihar - 845106",
+      "address": "Meghwal mathia Bazar, West Champaran, Bihar 845106",
+      "phone": "+91 9006457330",
+      "email": "a9006457330@gmail.com",
       "primaryColor": "#071d3f",
       "secondaryColor": "#d4af37",
       "accentColor": "#2563eb",
@@ -26,7 +26,7 @@
     "activeTemplateId": "admit_card_formal_govt",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
-      "tagline": "Affiliated to State Board | Bettiah, West Champaran",
+      "tagline": "Meghwal mathia Bazar, West Champaran, Bihar - 845106",
       "examName": "ANNUAL EXAMINATION 2026-27",
       "session": "2026-2027",
       "centerName": "Star Public School Campus - Examination Hall",
@@ -54,9 +54,9 @@
     "activeTemplateId": "tc_traditional_official",
     "customization": {
       "schoolName": "STAR PUBLIC SCHOOL",
-      "tagline": "Senior Secondary School | Affiliated to BSEB / CBSE",
+      "tagline": "Senior Secondary School | Meghwal mathia Bazar, West Champaran",
       "affiliationNo": "SPS/BIH/2018/094",
-      "schoolCode": "845438",
+      "schoolCode": "845106",
       "bookNo": "04",
       "prefixNo": "TC/2026/",
       "primaryColor": "#1e293b",
@@ -74,11 +74,11 @@
   },
   "marksheet": {
     "category": "marksheet",
-    "activeTemplateId": "marksheet_bihar_board",
+    "activeTemplateId": "marksheet_official_star_public",
     "customization": {
       "boardName": "BIHAR SCHOOL EXAMINATION BOARD / ACADEMIC COUNCIL",
-      "schoolName": "STAR PUBLIC SCHOOL, WEST CHAMPARAN",
-      "tagline": "Affiliated to State Board | Center Code: 845438",
+      "schoolName": "STAR PUBLIC SCHOOL",
+      "tagline": "Meghwal mathia Bazar, West Champaran, Bihar - 845106",
       "session": "2026-2027",
       "examName": "ANNUAL EVALUATION & PROGRESS REPORT",
       "primaryColor": "#1a5cf4",
@@ -91,7 +91,10 @@
       "showAttendance": true,
       "classTeacherSignLabel": "Class Teacher",
       "inchargeSignLabel": "Examination Controller",
-      "principalSignLabel": "Headmaster / Principal"
+      "principalSignLabel": "Headmaster / Principal",
+      "schoolAddress": "MAIN ROAD MATHIA BAZAR, MEGHWAL",
+      "examTitle": "FIRST TERMINAL EXAMINATION RESULT - 2026",
+      "termHeader": "First Term"
     },
     "updatedAt": "2026-10-24T10:32:05.985Z",
     "updatedBy": "ta2nfeez@gmail.com"

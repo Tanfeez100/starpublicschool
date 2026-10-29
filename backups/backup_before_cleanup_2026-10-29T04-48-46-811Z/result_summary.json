@@ -1,0 +1,110 @@
+[
+  {
+    "id": "9bebd436-3e5e-45e8-a7ec-c14657cdaac9",
+    "student_id": "8b92c427-8e9e-48ab-b883-6db027974b8a",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 416,
+    "percentage": 83.2,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:13.895",
+    "rank": 1
+  },
+  {
+    "id": "f8d6a90e-77ea-4366-aaa2-acc553f41490",
+    "student_id": "1f6eab65-cba1-46e2-aad9-89ad170aaa66",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 429,
+    "percentage": 85.8,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:14.502",
+    "rank": 2
+  },
+  {
+    "id": "06657309-2942-4c78-8866-a70d65058f7f",
+    "student_id": "5dfd8cf1-80c2-47e4-a9de-26a696e204f3",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 317,
+    "percentage": 63.4,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:14.774",
+    "rank": 3
+  },
+  {
+    "id": "09173e5f-4b21-468e-9207-fe41140e77e2",
+    "student_id": "1cf7e636-e56c-4ef6-a6af-6bdb62ee496f",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 250,
+    "percentage": 50,
+    "division": "Second",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:15.268",
+    "rank": 4
+  },
+  {
+    "id": "e38faa50-ae11-4061-896c-bbe11fafcb5c",
+    "student_id": "188c5ebb-e066-4d37-aa19-e142ef0e5a80",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 459,
+    "percentage": 91.8,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:15.527",
+    "rank": 1
+  },
+  {
+    "id": "acb1b0e0-42b8-4add-8cd9-30d27db98f01",
+    "student_id": "09d4f328-e7e5-4e59-9ea5-3d20b5738e1e",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 370,
+    "percentage": 74,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:16.031",
+    "rank": 4
+  },
+  {
+    "id": "7a37b56f-d4bd-4ff6-915e-70b51d2001ae",
+    "student_id": "8a157b02-3566-4d00-a985-0c440aaa34bb",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 381,
+    "percentage": 76.2,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:14.212",
+    "rank": 2
+  },
+  {
+    "id": "c86c7e8d-01e9-4502-b55d-2f55cb73d3d1",
+    "student_id": "56db9ec1-7a8a-4853-b2bc-f2729fe12f4b",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 383,
+    "percentage": 76.6,
+    "division": "First",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:15.033",
+    "rank": 3
+  },
+  {
+    "id": "e553a8a9-e6a1-49fe-b4c4-ef019849bdd5",
+    "student_id": "5f022cea-35a2-4336-9a6c-919049ad9c4e",
+    "terminal": "First",
+    "total_marks": 500,
+    "total_obtained": 160,
+    "percentage": 32,
+    "division": "Third",
+    "status": "Published",
+    "calculated_at": "2026-10-27T05:24:15.787",
+    "rank": 5
+  }
+]

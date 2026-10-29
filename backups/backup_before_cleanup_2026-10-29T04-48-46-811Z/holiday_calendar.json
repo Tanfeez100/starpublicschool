@@ -1,0 +1,24 @@
+[
+  {
+    "id": "00caf234-c2e9-4364-af2b-0177beb2b058",
+    "holiday_date": "2026-06-03",
+    "title": "Holiday",
+    "description": null,
+    "created_by": "c3b891a9-06c3-4741-a0b4-4026dbe7b2db",
+    "created_at": "2026-06-03T16:11:02.215837+00:00",
+    "updated_at": "2026-06-03T16:11:02.215837+00:00",
+    "start_date": "2026-06-03",
+    "end_date": "2026-06-05"
+  },
+  {
+    "id": "169a82d9-5e0c-44f9-98f4-f807a04d3c04",
+    "holiday_date": "2026-08-15",
+    "title": "Independence Day",
+    "description": "National Holiday",
+    "created_by": "c3b891a9-06c3-4741-a0b4-4026dbe7b2db",
+    "created_at": "2026-06-28T02:25:01.529575+00:00",
+    "updated_at": "2026-06-28T02:25:01.529575+00:00",
+    "start_date": "2026-08-15",
+    "end_date": "2026-08-15"
+  }
+]

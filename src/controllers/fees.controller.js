@@ -1181,11 +1181,11 @@ export const generateNextMonthBills = async (req, res) => {
           totalFee = fsRows.reduce((s, r) => s + (parseFloat(r.fee_amount || 0)), 0);
         } else {
           // fallback (kept for backward compatibility)
-          totalFee = 1000 + 200 + 500 + 300; // tuition + exam + annual + computer
+          totalFee = 0; // tuition + exam + annual + computer
         }
       } catch (e) {
         console.error('Failed to fetch fee_structure for class', student.class, e);
-        totalFee = 1000 + 200 + 500 + 300;
+        totalFee = 0;
       }
 
       const transportFee = student.uses_transport ? parseFloat(student.transport_charge || 0) : 0;

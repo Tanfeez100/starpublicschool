@@ -19,158 +19,13 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // Seed initial fallback data
 const getInitialFallbackData = () => ({
-  examinations: [
-    {
-      id: "exam-2026-hy-01",
-      name: "Half-Yearly Examination 2026-27",
-      academic_session: "2026-27",
-      exam_type: "Half-Yearly Examination",
-      start_date: "2026-10-15",
-      end_date: "2026-10-25",
-      applicable_classes: ["Nursery", "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5"],
-      description: "Mid-term comprehensive evaluation covering Term 1 syllabus across all subjects.",
-      status: "ongoing",
-      result_published: false,
-      result_published_at: null,
-      created_by: "Administrator",
-      created_at: new Date("2026-09-20").toISOString(),
-      updated_at: new Date("2026-10-10").toISOString(),
-    },
-    {
-      id: "exam-2026-ut1-01",
-      name: "Unit Test 1 (2026-27)",
-      academic_session: "2026-27",
-      exam_type: "Unit Test",
-      start_date: "2026-07-10",
-      end_date: "2026-07-16",
-      applicable_classes: ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"],
-      description: "First unit assessment for foundational literacy and numeracy.",
-      status: "completed",
-      result_published: true,
-      result_published_at: new Date("2026-07-25").toISOString(),
-      created_by: "Administrator",
-      created_at: new Date("2026-06-25").toISOString(),
-      updated_at: new Date("2026-07-25").toISOString(),
-    },
-    {
-      id: "exam-2026-annual-01",
-      name: "Annual Examination 2026-27",
-      academic_session: "2026-27",
-      exam_type: "Annual Examination",
-      start_date: "2027-02-20",
-      end_date: "2027-03-05",
-      applicable_classes: ["Nursery", "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5"],
-      description: "Final academic session culmination and grade promotion examination.",
-      status: "scheduled",
-      result_published: false,
-      result_published_at: null,
-      created_by: "Administrator",
-      created_at: new Date("2026-10-01").toISOString(),
-      updated_at: new Date("2026-10-01").toISOString(),
-    }
-  ],
+  examinations: [],
   examination_subjects: [],
-  examination_timetables: [
-    {
-      id: "tt-hy-c1-01",
-      examination_id: "exam-2026-hy-01",
-      class_name: "Class 1",
-      section: "All",
-      subject_name: "English",
-      exam_date: "2026-10-15",
-      start_time: "09:00 AM",
-      end_time: "11:30 AM",
-      max_marks: 50,
-      pass_marks: 17,
-      room_no: "Room 101",
-      instructions: "Bring HB pencils and coloring set for section B.",
-      status: "published",
-      created_at: new Date("2026-10-01").toISOString(),
-      updated_at: new Date("2026-10-01").toISOString(),
-    },
-    {
-      id: "tt-hy-c1-02",
-      examination_id: "exam-2026-hy-01",
-      class_name: "Class 1",
-      section: "All",
-      subject_name: "Mathematics",
-      exam_date: "2026-10-17",
-      start_time: "09:00 AM",
-      end_time: "11:30 AM",
-      max_marks: 50,
-      pass_marks: 17,
-      room_no: "Room 101",
-      instructions: "Rulers and geometric tools permitted.",
-      status: "published",
-      created_at: new Date("2026-10-01").toISOString(),
-      updated_at: new Date("2026-10-01").toISOString(),
-    },
-    {
-      id: "tt-hy-c1-03",
-      examination_id: "exam-2026-hy-01",
-      class_name: "Class 1",
-      section: "All",
-      subject_name: "Hindi",
-      exam_date: "2026-10-19",
-      start_time: "09:00 AM",
-      end_time: "11:30 AM",
-      max_marks: 50,
-      pass_marks: 17,
-      room_no: "Room 101",
-      instructions: "Oral assessment will be conducted immediately following written paper.",
-      status: "published",
-      created_at: new Date("2026-10-01").toISOString(),
-      updated_at: new Date("2026-10-01").toISOString(),
-    },
-    {
-      id: "tt-hy-c1-04",
-      examination_id: "exam-2026-hy-01",
-      class_name: "Class 1",
-      section: "All",
-      subject_name: "EVS",
-      exam_date: "2026-10-21",
-      start_time: "09:00 AM",
-      end_time: "11:30 AM",
-      max_marks: 50,
-      pass_marks: 17,
-      room_no: "Room 101",
-      instructions: "Environmental Science comprehensive paper.",
-      status: "published",
-      created_at: new Date("2026-10-01").toISOString(),
-      updated_at: new Date("2026-10-01").toISOString(),
-    }
-  ],
+  examination_timetables: [],
   examination_marks: [],
   examination_results: [],
-  examination_notices: [
-    {
-      id: "notice-01",
-      title: "Half-Yearly Examination 2026-27 Date Sheet Released",
-      message: "The comprehensive date sheet for Half-Yearly Examination has been published. Parents and students are requested to review arrival and reporting schedules carefully. Reporting time is 08:30 AM sharp.",
-      examination_id: "exam-2026-hy-01",
-      target_class: "All",
-      target_section: "All",
-      notice_type: "timetable",
-      status: "published",
-      published_at: new Date("2026-10-02").toISOString(),
-      created_by: "Principal Office",
-      created_at: new Date("2026-10-02").toISOString(),
-    },
-    {
-      id: "notice-02",
-      title: "Admit Card & ID Card Mandatory in Examination Hall",
-      message: "All students must carry their authentic School ID Card and Examination Admit Card throughout the examination period. No student will be allowed entry without verification.",
-      examination_id: "exam-2026-hy-01",
-      target_class: "All",
-      target_section: "All",
-      notice_type: "instructions",
-      status: "published",
-      published_at: new Date("2026-10-05").toISOString(),
-      created_by: "Examination Controller",
-      created_at: new Date("2026-10-05").toISOString(),
-    }
-  ],
-  examination_audit_logs: []
+  examination_notices: [],
+  examination_audit_logs: [],
 });
 
 // Load fallback store
@@ -238,51 +93,41 @@ async function getEnrolledStudents(className, section = "All") {
       .order("roll_no", { ascending: true });
 
     if (className && className !== "All") {
-      q = q.eq("class", className);
+      const rawNum = String(className).replace(/^Class\s+/i, "").trim();
+      const candidates = Array.from(new Set([className, rawNum, `Class ${rawNum}`]));
+      q = q.in("class", candidates);
     }
     if (section && section !== "All") {
       q = q.eq("section", section);
     }
 
     const { data, error } = await q;
-    if (!error && Array.isArray(data) && data.length > 0) {
+    if (!error && Array.isArray(data)) {
       return data;
     }
   } catch (err) {
-    console.warn("Could not query students from supabase, using synthetic class sample:", err);
+    console.warn("Could not query students from supabase:", err);
   }
 
-  // Graceful fallback students for testing/empty DB
-  return [
-    { id: "std-001", name: "Aarav Sharma", roll_no: "1", class: className || "Class 1", section: "A", status: "active", father_name: "Rajesh Sharma", mobile: "9876543210" },
-    { id: "std-002", name: "Ananya Patel", roll_no: "2", class: className || "Class 1", section: "A", status: "active", father_name: "Vikram Patel", mobile: "9876543211" },
-    { id: "std-003", name: "Rohan Verma", roll_no: "3", class: className || "Class 1", section: "A", status: "active", father_name: "Manoj Verma", mobile: "9876543212" },
-    { id: "std-004", name: "Priya Gupta", roll_no: "4", class: className || "Class 1", section: "A", status: "active", father_name: "Sanjay Gupta", mobile: "9876543213" },
-    { id: "std-005", name: "Kabir Singh", roll_no: "5", class: className || "Class 1", section: "A", status: "active", father_name: "Harpreet Singh", mobile: "9876543214" },
-  ];
+  return [];
 }
 
 // Fetch master subjects
 async function getMasterSubjects(className) {
   try {
-    const { data, error } = await supabase.from("subjects").select("id, name, code, max_external_marks, max_internal_marks");
+    const { data, error } = await supabase.from("subjects").select("id, name, code");
     if (!error && Array.isArray(data) && data.length > 0) {
-      return data;
+      return data.map((sub) => ({
+        ...sub,
+        max_external_marks: 80,
+        max_internal_marks: 20,
+      }));
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn("Could not query master subjects from supabase:", err);
   }
 
-  return [
-    { id: "sub-1", name: "English", code: "ENG", max_external_marks: 80, max_internal_marks: 20 },
-    { id: "sub-2", name: "Hindi", code: "HIN", max_external_marks: 80, max_internal_marks: 20 },
-    { id: "sub-3", name: "Mathematics", code: "MATH", max_external_marks: 80, max_internal_marks: 20 },
-    { id: "sub-4", name: "Science / EVS", code: "EVS", max_external_marks: 80, max_internal_marks: 20 },
-    { id: "sub-5", name: "Social Studies", code: "SST", max_external_marks: 80, max_internal_marks: 20 },
-    { id: "sub-6", name: "Computer Science", code: "COMP", max_external_marks: 50, max_internal_marks: 50 },
-    { id: "sub-7", name: "General Knowledge", code: "GK", max_external_marks: 50, max_internal_marks: 0 },
-    { id: "sub-8", name: "Art & Craft", code: "ART", max_external_marks: 50, max_internal_marks: 0 },
-  ];
+  return [];
 }
 
 /* ============================================================================
