@@ -2506,8 +2506,7 @@ export const bulkImportClassMarksController = async (req, res) => {
           marks_obtained: isAbsent ? "AB" : markValue
         });
 
-        // Upsert into Supabase marks table
-        await supabase
+        const { error: upsertErr } = await supabase
           .from("marks")
           .upsert(
             {
@@ -2515,12 +2514,16 @@ export const bulkImportClassMarksController = async (req, res) => {
               subject_id: sub.id,
               terminal: normTerminal,
               external_marks: isAbsent ? 0 : markValue,
-              total_marks: isAbsent ? 0 : markValue,
+              internal_marks: 0,
               status: "PUBLISHED",
               updated_at: new Date().toISOString()
             },
             { onConflict: "student_id,subject_id,terminal" }
           );
+
+        if (upsertErr) {
+          console.warn(`Could not save mark for student ${studentRecord.name} sub ${sub.name}:`, upsertErr.message);
+        }
       }
 
       // Calculate percentage & division
