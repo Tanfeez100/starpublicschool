@@ -876,41 +876,79 @@ router.post("/forgot-password", async (req, res) => {
    ====================================================== */
 router.post("/reset-password", adminOnly, async (req, res) => {
   try {
-    const { email, newPassword } = req.body;
+    const { id, userId, email, newPassword } = req.body;
+    let targetId = id || userId;
 
-    if (!email || !newPassword) {
+    if (!targetId && !email) {
       return res.status(400).json({
-        message: "Email and new password are required"
+        message: "Teacher ID or email is required for password reset",
       });
     }
 
-    if (newPassword.length < 6) {
+    if (!newPassword || String(newPassword).length < 6) {
       return res.status(400).json({
-        message: "Password must be at least 6 characters"
+        message: "New password must be at least 6 characters",
       });
     }
 
-    // ⚡ OPTIMIZATION: Modified approach - use admin API directly with email
-    // Note: Supabase admin API provides updateUserByEmail method if available
-    // Otherwise, we need to add a backend endpoint that requires full admin authentication
+    // Resolve targetId from email if not provided directly
+    if (!targetId && email) {
+      const { data: usersData, error: listError } = await retryWithBackoff(() =>
+        supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+      );
 
-    // For now, return a note that admin must use Supabase Dashboard or provide user ID
-    return res.status(400).json({
-      message: "Please provide user ID instead of email for direct password reset",
-      hint: "Use PATCH /api/auth/reset-password/:id endpoint",
+      if (!listError && usersData?.users?.length) {
+        const found = usersData.users.find(
+          (u) => (u.email || "").toLowerCase() === String(email).trim().toLowerCase()
+        );
+        if (found) {
+          targetId = found.id;
+        }
+      }
+    }
+
+    if (!targetId) {
+      return res.status(404).json({
+        message: "No registered user found with the specified details",
+      });
+    }
+
+    const { error: updateError } = await retryWithBackoff(() =>
+      supabaseAdmin.auth.admin.updateUserById(targetId, {
+        password: newPassword,
+      })
+    );
+
+    if (updateError) {
+      console.error("Reset password error:", updateError);
+      return res.status(updateError.status || 503).json({
+        message: updateError.message || "Failed to reset password. Please try again.",
+      });
+    }
+
+    try {
+      await supabase
+        .from("teacher_profiles")
+        .update({ must_reset_password: false, updated_at: new Date().toISOString() })
+        .eq("id", targetId);
+    } catch (_) {}
+
+    return res.json({
+      success: true,
+      message: "Password reset successfully",
+      userId: targetId,
     });
-
   } catch (err) {
     console.error("Reset password error:", err);
     res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
-      error: err.message
+      error: err.message,
     });
   }
 });
 
 /* ======================================================
-   RESET PASSWORD BY USER ID (More efficient)
+   RESET PASSWORD BY USER ID (Direct Admin Override)
    ====================================================== */
 router.patch("/reset-password/:id", adminOnly, async (req, res) => {
   try {
@@ -919,13 +957,13 @@ router.patch("/reset-password/:id", adminOnly, async (req, res) => {
 
     if (!id || !newPassword) {
       return res.status(400).json({
-        message: "User ID and new password are required"
+        message: "User ID and new password are required",
       });
     }
 
-    if (newPassword.length < 6) {
+    if (String(newPassword).length < 6) {
       return res.status(400).json({
-        message: "Password must be at least 6 characters"
+        message: "Password must be at least 6 characters",
       });
     }
 
@@ -940,25 +978,31 @@ router.patch("/reset-password/:id", adminOnly, async (req, res) => {
       console.error("Reset password error:", updateError);
       if (updateError.status === 404) {
         return res.status(404).json({
-          message: "User not found"
+          message: "User not found",
         });
       }
       return res.status(503).json({
         message: "Failed to reset password. Please try again.",
-        error: updateError.message
+        error: updateError.message,
       });
     }
+
+    try {
+      await supabase
+        .from("teacher_profiles")
+        .update({ must_reset_password: false, updated_at: new Date().toISOString() })
+        .eq("id", id);
+    } catch (_) {}
 
     res.json({
       success: true,
       message: "Password reset successfully",
     });
-
   } catch (err) {
     console.error("Reset password error:", err);
     res.status(503).json({
       message: "Service temporarily unavailable. Please try again.",
-      error: err.message
+      error: err.message,
     });
   }
 });
