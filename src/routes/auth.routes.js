@@ -98,6 +98,15 @@ const isSchemaMissing = (error) => {
 const generateTemporaryPassword = () =>
   `Sps@${Math.random().toString(36).slice(2, 8)}${Math.floor(100 + Math.random() * 900)}`;
 
+const generateGeneralizedPassword = (name = "") => {
+  const clean = String(name || "").trim().replace(/[^a-zA-Z0-9]/g, "");
+  let prefix = clean.slice(0, 4);
+  if (prefix.length < 4) {
+    prefix = (prefix + "Star").slice(0, 4);
+  }
+  return `${prefix}@123`;
+};
+
 const generateUsername = ({ fullName = "", employeeId = "", email = "" } = {}) => {
   const source = employeeId || fullName || email.split("@")[0] || "teacher";
   const slug = String(source)
@@ -211,6 +220,42 @@ const upsertTeacherProfile = async ({ teacherId, payload = {}, email, actorId })
   const fullName = sanitizeString(payload.full_name || payload.fullName || payload.name) || "";
   const employeeId = sanitizeString(payload.employee_id || payload.employeeId) || null;
   const username = sanitizeString(payload.username) || generateUsername({ fullName, employeeId, email });
+
+  const staffType = sanitizeString(payload.staff_type || payload.staffType) || "teaching";
+  const roleTitle = sanitizeString(payload.role_title || payload.roleTitle || payload.role) || "";
+  const subject = sanitizeString(payload.subject) || "";
+
+  const highestQual = sanitizeString(payload.highest_qualification || payload.highestQualification || payload.qualification) || "";
+  const profQual = sanitizeString(payload.professional_qualification || payload.professionalQualification) || "";
+  const combinedQual = highestQual && profQual ? `${highestQual} (${profQual})` : (highestQual || profQual || null);
+
+  const fatherName = sanitizeString(payload.father_name || payload.fatherName) || "";
+  const motherName = sanitizeString(payload.mother_name || payload.motherName) || "";
+  const documentUrl = sanitizeString(payload.document_url || payload.documentUrl) || "";
+  const profDocumentUrl = sanitizeString(payload.professional_document_url || payload.professionalDocumentUrl) || "";
+  const aadharCardUrl = sanitizeString(payload.aadhar_card_url || payload.aadharCardUrl || payload.aadhaar_card_url || payload.aadhaar_url) || "";
+  const aadharNumber = sanitizeString(payload.aadhar_number || payload.aadharNumber || payload.aadhaar_number) || "";
+  const cvUrl = sanitizeString(payload.cv_url || payload.cvUrl || payload.resume_url || payload.resumeUrl) || "";
+  const offerLetterUrl = sanitizeString(payload.offer_letter_url || payload.offerLetterUrl || payload.offer_letter) || "";
+  const emergencyPhone = sanitizeString(payload.emergency_contact || payload.emergencyContact) || "";
+
+  const metaObj = {
+    staff_type: staffType,
+    role_title: roleTitle,
+    subject: subject,
+    father_name: fatherName,
+    mother_name: motherName,
+    highest_qualification: highestQual,
+    professional_qualification: profQual,
+    document_url: documentUrl,
+    professional_document_url: profDocumentUrl,
+    aadhar_card_url: aadharCardUrl,
+    aadhar_number: aadharNumber,
+    cv_url: cvUrl,
+    offer_letter_url: offerLetterUrl,
+    emergency_contact: emergencyPhone,
+  };
+
   const profile = {
     id: teacherId,
     employee_id: employeeId,
@@ -218,13 +263,13 @@ const upsertTeacherProfile = async ({ teacherId, payload = {}, email, actorId })
     mobile: sanitizeString(payload.mobile) || null,
     email,
     gender: sanitizeString(payload.gender) || null,
-    date_of_birth: sanitizeString(payload.date_of_birth || payload.dateOfBirth) || null,
-    qualification: sanitizeString(payload.qualification) || null,
-    designation: sanitizeString(payload.designation) || null,
-    department: sanitizeString(payload.department) || null,
+    date_of_birth: sanitizeString(payload.date_of_birth || payload.dateOfBirth || payload.dob) || null,
+    qualification: combinedQual,
+    designation: sanitizeString(payload.designation) || (staffType === "non_teaching" ? (roleTitle || "Support Staff") : "Faculty Member"),
+    department: sanitizeString(payload.department) || (staffType === "non_teaching" ? "Administration & Support" : "Academics"),
     joining_date: sanitizeString(payload.joining_date || payload.joiningDate) || null,
     address: sanitizeString(payload.address) || null,
-    emergency_contact: sanitizeString(payload.emergency_contact || payload.emergencyContact) || null,
+    emergency_contact: JSON.stringify(metaObj),
     photo_url: sanitizeString(payload.photo_url || payload.photoUrl) || null,
     status: sanitizeString(payload.status) || "active",
     username,
@@ -234,11 +279,39 @@ const upsertTeacherProfile = async ({ teacherId, payload = {}, email, actorId })
     updated_at: new Date().toISOString(),
   };
 
-  const { data, error } = await supabase
+  const profileWithExtended = {
+    ...profile,
+    staff_type: staffType,
+    role_title: roleTitle || null,
+    subject: subject || null,
+    father_name: fatherName || null,
+    mother_name: motherName || null,
+    highest_qualification: highestQual || null,
+    professional_qualification: profQual || null,
+    document_url: documentUrl || null,
+    professional_document_url: profDocumentUrl || null,
+    aadhar_card_url: aadharCardUrl || null,
+    aadhar_number: aadharNumber || null,
+    cv_url: cvUrl || null,
+    offer_letter_url: offerLetterUrl || null,
+  };
+
+  let { data, error } = await supabase
     .from("teacher_profiles")
-    .upsert([profile], { onConflict: "id" })
+    .upsert([profileWithExtended], { onConflict: "id" })
     .select("*")
     .single();
+
+  if (error && (error.code === "PGRST204" || error.message?.includes("column") || error.message?.includes("schema cache"))) {
+    // If native columns have not been migrated into table yet, fallback to base columns + emergency_contact meta
+    const fallbackRes = await supabase
+      .from("teacher_profiles")
+      .upsert([profile], { onConflict: "id" })
+      .select("*")
+      .single();
+    data = fallbackRes.data;
+    error = fallbackRes.error;
+  }
 
   if (error) {
     if (isSchemaMissing(error)) {
@@ -248,7 +321,22 @@ const upsertTeacherProfile = async ({ teacherId, payload = {}, email, actorId })
     throw error;
   }
 
-  return data;
+  return {
+    ...data,
+    staff_type: staffType,
+    role_title: roleTitle,
+    subject: subject,
+    father_name: fatherName,
+    mother_name: motherName,
+    highest_qualification: highestQual,
+    professional_qualification: profQual,
+    document_url: documentUrl,
+    professional_document_url: profDocumentUrl,
+    aadhar_card_url: aadharCardUrl,
+    aadhar_number: aadharNumber,
+    cv_url: cvUrl,
+    offer_letter_url: offerLetterUrl,
+  };
 };
 
 const ensureTeacherRole = async (teacherId) => {
@@ -550,8 +638,12 @@ router.post("/create-user", adminOnly, async (req, res) => {
    ====================================================== */
 router.post("/teachers", adminOnly, async (req, res) => {
   try {
-    const { email } = req.body;
-    const password = req.body.password || generateTemporaryPassword();
+    let email = sanitizeString(req.body.email);
+    const empId = sanitizeString(req.body.employee_id || req.body.employeeId) || `STF-${Math.floor(100 + Math.random() * 900)}`;
+    if (!email) {
+      email = `${empId.toLowerCase().replace(/[^a-z0-9]/g, '')}@starpublicschool.com`;
+    }
+    const password = req.body.password || generateGeneralizedPassword(req.body.full_name || req.body.fullName || req.body.name);
     const createdTeacher = await createManagedUser({
       email,
       password,
@@ -559,7 +651,7 @@ router.post("/teachers", adminOnly, async (req, res) => {
     });
     const profile = await upsertTeacherProfile({
       teacherId: createdTeacher.id,
-      payload: req.body,
+      payload: { ...req.body, employee_id: empId },
       email,
       actorId: req.user?.id || null,
     });
@@ -627,14 +719,58 @@ router.get("/teachers", adminOnly, async (req, res) => {
       const assignments = assignmentByTeacherId.get(teacher.id) || [];
       const assignment = assignments[0] || null;
       const profile = profileByTeacherId.get(teacher.id) || null;
+      let meta = {};
+      try {
+        if (profile?.emergency_contact && profile.emergency_contact.startsWith("{")) {
+          meta = JSON.parse(profile.emergency_contact);
+        }
+      } catch (_) { }
+
+      const enrichedProfile = profile
+        ? {
+          ...profile,
+          staff_type: profile.staff_type || meta.staff_type || "teaching",
+          role_title: profile.role_title || meta.role_title || "",
+          subject: profile.subject || meta.subject || "",
+          father_name: profile.father_name || meta.father_name || "",
+          mother_name: profile.mother_name || meta.mother_name || "",
+          highest_qualification: profile.highest_qualification || meta.highest_qualification || profile.qualification || "",
+          professional_qualification: profile.professional_qualification || meta.professional_qualification || "",
+          document_url: profile.document_url || meta.document_url || "",
+          professional_document_url: profile.professional_document_url || meta.professional_document_url || "",
+          aadhar_card_url: profile.aadhar_card_url || meta.aadhar_card_url || "",
+          aadhar_number: profile.aadhar_number || meta.aadhar_number || "",
+          cv_url: profile.cv_url || meta.cv_url || "",
+          offer_letter_url: profile.offer_letter_url || meta.offer_letter_url || "",
+        }
+        : null;
+
       return {
         ...teacher,
-        profile,
+        profile: enrichedProfile,
         employeeId: profile?.employee_id || "",
         fullName: profile?.full_name || "",
         mobile: profile?.mobile || "",
         username: profile?.username || "",
         status: profile?.status || "active",
+        photoUrl: profile?.photo_url || "",
+        dateOfBirth: profile?.date_of_birth || "",
+        staffType: profile?.staff_type || meta.staff_type || "teaching",
+        roleTitle: profile?.role_title || meta.role_title || "",
+        subject: profile?.subject || meta.subject || "",
+        designation: profile?.designation || (meta.staff_type === "non_teaching" ? (meta.role_title || "Support Staff") : "Faculty Member"),
+        department: profile?.department || (meta.staff_type === "non_teaching" ? "Administration & Support" : "Academics"),
+        fatherName: profile?.father_name || meta.father_name || "",
+        motherName: profile?.mother_name || meta.mother_name || "",
+        highestQualification: profile?.highest_qualification || meta.highest_qualification || profile?.qualification || "",
+        professionalQualification: profile?.professional_qualification || meta.professional_qualification || "",
+        documentUrl: profile?.document_url || meta.document_url || "",
+        professionalDocumentUrl: profile?.professional_document_url || meta.professional_document_url || "",
+        aadharCardUrl: profile?.aadhar_card_url || meta.aadhar_card_url || "",
+        aadharNumber: profile?.aadhar_number || meta.aadhar_number || "",
+        cvUrl: profile?.cv_url || meta.cv_url || "",
+        offerLetterUrl: profile?.offer_letter_url || meta.offer_letter_url || "",
+        address: profile?.address || "",
         assignment,
         assignments,
         assignedClass: assignment?.class || null,
@@ -812,23 +948,114 @@ router.delete("/teachers/:id/assignment", adminOnly, async (req, res) => {
   }
 });
 
-router.delete("/teachers/:id", adminOnly, async (req, res) => {
+/* ======================================================
+   UPDATE TEACHER PROFILE (PUT / PATCH /teachers/:id)
+   ====================================================== */
+const handleUpdateTeacherProfile = async (req, res) => {
   try {
-    const deletedTeacher = await deleteManagedUser({
-      userId: req.params.id,
-      requiredRole: "teacher",
-      actorUserId: req.user?.id || null,
+    const { id } = req.params;
+    if (!id) {
+      throw createHttpError(400, "Teacher ID is required");
+    }
+
+    let resolvedUserId = null;
+    let existingProfile = null;
+
+    if (isValidUuid(id)) {
+      resolvedUserId = id;
+      const { data: prof } = await supabase
+        .from("teacher_profiles")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
+      existingProfile = prof;
+    } else {
+      const { data: prof } = await supabase
+        .from("teacher_profiles")
+        .select("*")
+        .or(`employee_id.eq.${id},username.eq.${id},email.eq.${id}`)
+        .maybeSingle();
+      if (prof?.id) {
+        resolvedUserId = prof.id;
+        existingProfile = prof;
+      }
+    }
+
+    if (!resolvedUserId) {
+      throw createHttpError(404, "Teacher profile not found");
+    }
+
+    const effectiveEmail = req.body.email || existingProfile?.email;
+    const profile = await upsertTeacherProfile({
+      teacherId: resolvedUserId,
+      payload: {
+        ...existingProfile,
+        ...req.body,
+        employee_id: req.body.employee_id || req.body.employeeId || existingProfile?.employee_id,
+      },
+      email: effectiveEmail,
+      actorId: req.user?.id || null,
     });
 
     return res.json({
       success: true,
-      message: "Teacher removed successfully",
-      deletedTeacher,
+      message: "Teacher profile updated successfully",
+      teacher: profile,
+    });
+  } catch (err) {
+    console.error("Update teacher error:", err);
+    return res.status(err.status || 500).json({
+      message: err.message || "Failed to update teacher profile",
+    });
+  }
+};
+
+router.put("/teachers/:id", adminOnly, handleUpdateTeacherProfile);
+router.patch("/teachers/:id", adminOnly, handleUpdateTeacherProfile);
+
+router.delete("/teachers/:id", adminOnly, async (req, res) => {
+  try {
+    const teacherId = req.params.id;
+    if (!teacherId) {
+      throw createHttpError(400, "Teacher ID is required");
+    }
+
+    if (req.user?.id && req.user.id === teacherId) {
+      throw createHttpError(400, "You cannot remove your own account");
+    }
+
+    // 1. Delete dependent relations first to satisfy foreign key constraints
+    await Promise.allSettled([
+      supabase.from("teacher_assignments").delete().eq("teacher_id", teacherId),
+      supabase.from("timetable_entries").delete().eq("teacher_id", teacherId),
+      supabase.from("teacher_attendance_records").delete().eq("teacher_id", teacherId),
+      supabase.from("teacher_leave_requests").delete().eq("teacher_id", teacherId),
+      supabase.from("teacher_notifications").delete().eq("teacher_id", teacherId),
+      supabase.from("teacher_attendance_settings").delete().eq("teacher_id", teacherId),
+    ]);
+
+    // 2. Delete teacher profile
+    await supabase.from("teacher_profiles").delete().eq("id", teacherId);
+
+    // 3. Delete user role
+    await supabase.from("user_roles").delete().eq("user_id", teacherId);
+
+    // 4. Delete Supabase auth user
+    try {
+      await retryWithBackoff(() => supabaseAdmin.auth.admin.deleteUser(teacherId));
+    } catch (authDelErr) {
+      console.warn("Auth user delete notice:", authDelErr?.message || authDelErr);
+    }
+
+    return res.json({
+      success: true,
+      message: "Teacher and all related records removed successfully",
+      teacherId,
     });
   } catch (err) {
     console.error("Remove teacher error:", err);
-    return res.status(err.status || 503).json({
-      message: err.message || "Service temporarily unavailable. Please try again.",
+    return res.status(err.status || 500).json({
+      message: err.message || "Failed to remove teacher",
       ...(err.detail ? { error: err.detail } : {}),
     });
   }
@@ -872,137 +1099,144 @@ router.post("/forgot-password", async (req, res) => {
 });
 
 /* ======================================================
-   RESET PASSWORD (Admin can reset password directly)
+   RESET PASSWORD HELPER & ROUTES (Direct Admin Override)
    ====================================================== */
-router.post("/reset-password", adminOnly, async (req, res) => {
-  try {
-    const { id, userId, email, newPassword } = req.body;
-    let targetId = id || userId;
+const handleResetUserPassword = async ({ targetId, email, newPassword }) => {
+  if (!newPassword || String(newPassword).length < 6) {
+    throw createHttpError(400, "Password must be at least 6 characters long");
+  }
 
-    if (!targetId && !email) {
-      return res.status(400).json({
-        message: "Teacher ID or email is required for password reset",
-      });
-    }
+  let resolvedUserId = null;
+  let resolvedEmail = email || null;
 
-    if (!newPassword || String(newPassword).length < 6) {
-      return res.status(400).json({
-        message: "New password must be at least 6 characters",
-      });
-    }
+  // 1. If targetId is already a valid UUID, use it directly
+  if (targetId && isValidUuid(targetId)) {
+    resolvedUserId = targetId;
+  }
 
-    // Resolve targetId from email if not provided directly
-    if (!targetId && email) {
-      const { data: usersData, error: listError } = await retryWithBackoff(() =>
-        supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 })
-      );
-
-      if (!listError && usersData?.users?.length) {
-        const found = usersData.users.find(
-          (u) => (u.email || "").toLowerCase() === String(email).trim().toLowerCase()
-        );
-        if (found) {
-          targetId = found.id;
-        }
+  // 2. If targetId is not a valid UUID (e.g. employee ID like TCH-101), look up in teacher_profiles
+  if (!resolvedUserId) {
+    const searchVal = targetId || email;
+    if (searchVal) {
+      let query = supabase.from("teacher_profiles").select("id, email, employee_id, username");
+      if (isValidUuid(searchVal)) {
+        query = query.eq("id", searchVal);
+      } else {
+        query = query.or(`employee_id.eq.${searchVal},username.eq.${searchVal},email.eq.${searchVal}`);
+      }
+      const { data: prof } = await query.maybeSingle();
+      if (prof?.id) {
+        resolvedUserId = prof.id;
+        resolvedEmail = resolvedEmail || prof.email;
       }
     }
+  }
 
-    if (!targetId) {
-      return res.status(404).json({
-        message: "No registered user found with the specified details",
-      });
+  // 3. If still not resolved and email exists, search in auth.users
+  if (!resolvedUserId && resolvedEmail) {
+    const { data: usersData } = await retryWithBackoff(() =>
+      supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+    );
+    const found = usersData?.users?.find(
+      (u) => (u.email || "").toLowerCase() === String(resolvedEmail).trim().toLowerCase()
+    );
+    if (found?.id) {
+      resolvedUserId = found.id;
     }
+  }
 
+  if (!resolvedUserId) {
+    throw createHttpError(404, "Teacher / Staff account not found for password reset");
+  }
+
+  // 4. Update password in Supabase Auth
+  try {
     const { error: updateError } = await retryWithBackoff(() =>
-      supabaseAdmin.auth.admin.updateUserById(targetId, {
+      supabaseAdmin.auth.admin.updateUserById(resolvedUserId, {
         password: newPassword,
       })
     );
 
     if (updateError) {
-      console.error("Reset password error:", updateError);
-      return res.status(updateError.status || 503).json({
-        message: updateError.message || "Failed to reset password. Please try again.",
-      });
+      // If user not found in auth.users but exists in teacher_profiles, create the auth user so login works!
+      if (updateError.status === 404 || updateError.message?.toLowerCase().includes("not found")) {
+        const { data: teacherProfile } = await supabase
+          .from("teacher_profiles")
+          .select("email, employee_id")
+          .eq("id", resolvedUserId)
+          .maybeSingle();
+
+        const userEmail = teacherProfile?.email || resolvedEmail || `${(teacherProfile?.employee_id || "staff").toLowerCase().replace(/[^a-z0-9]/g, "")}@starpublicschool.com`;
+        await retryWithBackoff(() =>
+          supabaseAdmin.auth.admin.createUser({
+            id: resolvedUserId,
+            email: userEmail,
+            password: newPassword,
+            email_confirm: true,
+          })
+        );
+      } else {
+        throw updateError;
+      }
     }
+  } catch (authErr) {
+    console.error("Auth password update error:", authErr);
+    throw createHttpError(authErr.status || 500, authErr.message || "Failed to update auth password");
+  }
 
-    try {
-      await supabase
-        .from("teacher_profiles")
-        .update({ must_reset_password: false, updated_at: new Date().toISOString() })
-        .eq("id", targetId);
-    } catch (_) {}
+  // 5. Update teacher_profiles must_reset_password flag to false
+  try {
+    await supabase
+      .from("teacher_profiles")
+      .update({ must_reset_password: false, updated_at: new Date().toISOString() })
+      .eq("id", resolvedUserId);
+  } catch (_) { }
 
+  return { id: resolvedUserId, email: resolvedEmail };
+};
+
+router.post("/reset-password", adminOnly, async (req, res) => {
+  try {
+    const { id, userId, email } = req.body;
+    const newPassword = req.body.newPassword || req.body.password || req.body.new_password;
+    const result = await handleResetUserPassword({
+      targetId: id || userId,
+      email,
+      newPassword,
+    });
     return res.json({
       success: true,
       message: "Password reset successfully",
-      userId: targetId,
+      userId: result.id,
     });
   } catch (err) {
     console.error("Reset password error:", err);
-    res.status(503).json({
-      message: "Service temporarily unavailable. Please try again.",
-      error: err.message,
+    return res.status(err.status || 400).json({
+      success: false,
+      message: err.message || "Failed to reset password. Please try again.",
     });
   }
 });
 
-/* ======================================================
-   RESET PASSWORD BY USER ID (Direct Admin Override)
-   ====================================================== */
 router.patch("/reset-password/:id", adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
-    const { newPassword } = req.body;
-
-    if (!id || !newPassword) {
-      return res.status(400).json({
-        message: "User ID and new password are required",
-      });
-    }
-
-    if (String(newPassword).length < 6) {
-      return res.status(400).json({
-        message: "Password must be at least 6 characters",
-      });
-    }
-
-    // Update user password with retry
-    const { error: updateError } = await retryWithBackoff(() =>
-      supabaseAdmin.auth.admin.updateUserById(id, {
-        password: newPassword,
-      })
-    );
-
-    if (updateError) {
-      console.error("Reset password error:", updateError);
-      if (updateError.status === 404) {
-        return res.status(404).json({
-          message: "User not found",
-        });
-      }
-      return res.status(503).json({
-        message: "Failed to reset password. Please try again.",
-        error: updateError.message,
-      });
-    }
-
-    try {
-      await supabase
-        .from("teacher_profiles")
-        .update({ must_reset_password: false, updated_at: new Date().toISOString() })
-        .eq("id", id);
-    } catch (_) {}
-
-    res.json({
+    const newPassword = req.body.newPassword || req.body.password || req.body.new_password;
+    const result = await handleResetUserPassword({
+      targetId: id,
+      email: req.body.email,
+      newPassword,
+    });
+    return res.json({
       success: true,
       message: "Password reset successfully",
+      userId: result.id,
     });
   } catch (err) {
     console.error("Reset password error:", err);
-    res.status(503).json({
-      message: "Service temporarily unavailable. Please try again.",
-      error: err.message,
+    return res.status(err.status || 400).json({
+      success: false,
+      message: err.message || "Failed to reset password. Please try again.",
     });
   }
 });

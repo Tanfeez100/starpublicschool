@@ -156,7 +156,7 @@ export const getExaminationOverview = async (req, res) => {
     const awaitingApprovalCount = resultsRecords.filter((r) => r.status === "under_review" || r.status === "draft").length;
 
     // Class wise completion stats
-    const standardClasses = ["Nursery", "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5"];
+    const standardClasses = ["Nursery", "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12"];
     const classProgress = standardClasses.map((cls) => {
       const classMarks = marksRecords.filter((m) => m.class_name === cls);
       const totalMarks = classMarks.length;
