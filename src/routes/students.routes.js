@@ -501,7 +501,7 @@ router.get("/all", adminOrTeacher, async (req, res) => {
 router.get("/classes", adminOrTeacher, async (req, res) => {
   try {
     const includeInactive = parseBooleanQuery(req.query.include_inactive, false);
-    const classSortOrder = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8"];
+    const classSortOrder = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
     const getClassOrder = (className) => {
       const normalizedClass = String(className || "").trim();
       const index = classSortOrder.indexOf(normalizedClass);

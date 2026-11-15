@@ -201,6 +201,14 @@ function timeToMinutes(timeStr) {
   return hours * 60 + minutes;
 }
 
+// Normalize class name for uniform matching (e.g. "1", "Class 1", "class 1" -> "1")
+export function normalizeClassName(value) {
+  const text = String(value || "").trim().toLowerCase();
+  const match = text.match(/^class\s*(\d+)$/);
+  if (match) return match[1];
+  return text;
+}
+
 // Validate period timings against school bounds and other periods
 function validatePeriodsNoOverlap(periods, schoolStartTime, schoolEndTime) {
   const errors = [];
@@ -292,7 +300,7 @@ export function detectSlotConflicts({
   for (const entry of candidateEntries) {
     // 1. Same Class & Section collision (Class cannot have two subjects in same period)
     if (
-      String(entry.class_name).toLowerCase() === String(class_name).toLowerCase() &&
+      normalizeClassName(entry.class_name) === normalizeClassName(class_name) &&
       String(entry.section).toLowerCase() === String(section).toLowerCase()
     ) {
       conflicts.push({
@@ -578,7 +586,7 @@ export const getTimetableEntries = async (req, res) => {
       entries = entries.filter((e) => e.academic_session === academic_session);
     }
     if (class_name && class_name !== "all" && class_name !== "All") {
-      entries = entries.filter((e) => String(e.class_name).toLowerCase() === String(class_name).toLowerCase());
+      entries = entries.filter((e) => normalizeClassName(e.class_name) === normalizeClassName(class_name));
     }
     if (section && section !== "all" && section !== "All") {
       entries = entries.filter((e) => String(e.section).toUpperCase() === String(section).toUpperCase());
@@ -1078,7 +1086,7 @@ export const getConflictReport = async (req, res) => {
 
         // 2. Class Double-Booking
         if (
-          String(e1.class_name).toLowerCase() === String(e2.class_name).toLowerCase() &&
+          normalizeClassName(e1.class_name) === normalizeClassName(e2.class_name) &&
           String(e1.section).toUpperCase() === String(e2.section).toUpperCase()
         ) {
           visitedPairs.add(pairKey);
@@ -1135,10 +1143,31 @@ export const getConflictReport = async (req, res) => {
 
 export const getTeacherTimetable = async (req, res) => {
   try {
-    const requestedTeacherId = req.params.teacherId || req.user?.id;
+    let requestedTeacherId = req.params.teacherId || req.user?.id;
+    if (!requestedTeacherId) {
+      return res.status(400).json({ success: false, message: "Teacher ID required" });
+    }
+
+    // Resolve employee_id to user_id if needed
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let resolvedTeacherId = requestedTeacherId;
+    if (!uuidRegex.test(requestedTeacherId)) {
+      try {
+        const { data: prof } = await supabase
+          .from("teacher_profiles")
+          .select("id, employee_id")
+          .eq("employee_id", requestedTeacherId)
+          .maybeSingle();
+        if (prof?.id) {
+          resolvedTeacherId = prof.id;
+        }
+      } catch (err) {
+        // fallback to original ID
+      }
+    }
 
     // Security scoping: Teachers can only view their own timetable unless admin
-    if (req.user?.role === "teacher" && String(req.user?.id) !== String(requestedTeacherId)) {
+    if (req.user?.role === "teacher" && String(req.user?.id) !== String(resolvedTeacherId)) {
       return res.status(403).json({
         success: false,
         message: "Access restricted: Teachers can only view their own schedule.",
@@ -1151,7 +1180,7 @@ export const getTeacherTimetable = async (req, res) => {
     // Teacher's published slots (or draft if admin previewing)
     const teacherEntries = (store.entries || []).filter((e) => {
       if (e.academic_session !== session) return false;
-      if (String(e.teacher_id) !== String(requestedTeacherId)) return false;
+      if (String(e.teacher_id) !== String(resolvedTeacherId) && String(e.teacher_id) !== String(requestedTeacherId)) return false;
       if (req.user?.role === "teacher" && e.status !== "published") return false;
       return true;
     });
@@ -1270,7 +1299,7 @@ export const getClassTimetable = async (req, res) => {
 
     const rawEntries = (store.entries || []).filter((e) => {
       if (e.academic_session !== session) return false;
-      if (String(e.class_name).toLowerCase() !== String(className).toLowerCase()) return false;
+      if (normalizeClassName(e.class_name) !== normalizeClassName(className)) return false;
       if (String(e.section).toUpperCase() !== sec) return false;
       return true;
     });
@@ -1280,7 +1309,7 @@ export const getClassTimetable = async (req, res) => {
         (s) =>
           s.weekday === entry.weekday &&
           Number(s.period_number) === Number(entry.period_number) &&
-          String(s.class_name).toLowerCase() === String(entry.class_name).toLowerCase() &&
+          normalizeClassName(s.class_name) === normalizeClassName(entry.class_name) &&
           String(s.section).toUpperCase() === String(entry.section).toUpperCase()
       );
       if (sub) {

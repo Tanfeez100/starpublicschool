@@ -87,7 +87,7 @@ function buildCloudinaryDeliveryUrl(url, transform) {
 function buildCloudinaryUploadOptions({ folderForCloud, studentPhoto = false }) {
   const options = {
     folder: folderForCloud,
-    resource_type: "image",
+    resource_type: studentPhoto ? "image" : "auto",
   };
 
   if (studentPhoto) {

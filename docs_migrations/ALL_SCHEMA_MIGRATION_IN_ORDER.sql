@@ -1,4 +1,4 @@
-﻿-- Full schema migration generated from DB_SCHEMA_AND_FUNCTIONS_ORDERED.md
+-- Full schema migration generated from DB_SCHEMA_AND_FUNCTIONS_ORDERED.md
 -- Order matches the documentation. Destructive/data-only utility steps are noted and skipped.
 -- Run on a database where the Supabase auth schema already exists.
 
@@ -1592,6 +1592,19 @@ create table if not exists public.teacher_profiles (
   address text,
   emergency_contact text,
   photo_url text,
+  staff_type varchar(50) default 'teaching',
+  role_title varchar(100),
+  subject varchar(100),
+  father_name varchar(150),
+  mother_name varchar(150),
+  highest_qualification varchar(150),
+  professional_qualification varchar(150),
+  document_url text,
+  professional_document_url text,
+  aadhar_card_url text,
+  aadhar_number varchar(20),
+  cv_url text,
+  offer_letter_url text,
   status text not null default 'active' check (status in ('active', 'inactive')),
   username text unique,
   must_reset_password boolean not null default true,
